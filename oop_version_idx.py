@@ -6,22 +6,68 @@ from tqdm import tqdm  # For displaying progress bars during training
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE  # For visualizing decision boundaries
 import pandas as pd
+from sklearn.cluster import KMeans
+import torch.nn.functional as F
+
+# TODO: Make faster or import from a library faiss
+def kmeans_torch(x, k, num_iters=100, tol=1e-4):
+    """
+    Torch implementation of k-means clustering
+    
+    Args:
+        x: Input tensor of shape (n_samples, n_features)
+        k: Number of clusters
+        num_iters: Maximum iterations
+        tol: Convergence tolerance
+    """
+    n_samples = x.size(0)
+    
+    # Get target dtype and device
+    target_dtype = x.dtype
+
+    # Randomly initialize centroids
+    rand_indices = torch.randperm(n_samples)[:k]
+    centroids = x[rand_indices]
+    
+    for _ in range(num_iters):
+        # Calculate distances
+        distances = torch.cdist(x, centroids)
+        
+        # Assign points to nearest centroid
+        labels = torch.argmin(distances, dim=1)
+        
+        # Update centroids
+        new_centroids = torch.zeros_like(centroids)
+        for i in range(k):
+            mask = labels == i
+            if mask.sum() > 0:
+                new_centroids[i] = x[mask].mean(dim=0)
+            else:
+                new_centroids[i] = centroids[i]
+        
+        # Check convergence
+        if torch.norm(new_centroids - centroids) < tol:
+            break
+            
+        centroids = new_centroids
+    labels = labels.to(dtype=target_dtype)
+    return labels, centroids
 
 class ActiveLearning:
     def __init__(self, dataObj, unlabelled_size, label_iterations, num_epochs,criterion=torch.nn.CrossEntropyLoss(), debug=False, lr=0.0005, seed=0, val_split=0.1, b=25):
-        self.dataObj = deepcopy(dataObj) # This is the dataset that is passed to the class
+        self.dataObj = deepcopy(dataObj) # This is the dataset that is passed to the class (MNIST in this case and with val removed)
         self.unlabelled_size = unlabelled_size # The size of the unlabelled dataset in percentage of the total dataset (minus validation)
         self.label_iterations = label_iterations # Number of iterations for active learning
         self.debug = debug # Debug mode for faster training
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') # Use GPU if available
         torch.manual_seed(seed)     # Set seed for reproducibility
-        self.val_data = None        # Validation data
+        self.val_data = None        # Validation data (NOT INDEX)
         self.val_split = val_split  # Validation split in percentage
-        self.uSet = None            # Unlabelled data
-        self.lSet = None            # Labelled data
+        self.uSet = None            # Unlabelled data Indices
+        self.lSet = None            # Labelled data Indices
 
-        self.first_uSet = None # Initial unlabelled data
-        self.first_lSet = None # Initial labelled data 
+        self.first_uSet = None # Initial unlabelled data Indices
+        self.first_lSet = None # Initial labelled data Indices
 
         self.num_epochs = num_epochs # Number of epochs for training
         self.b = b # Budget for each iteration of active learning
@@ -59,16 +105,12 @@ class ActiveLearning:
 
         self.unlabelled_size = int(self.unlabelled_size * len(self.dataObj))
         indexes_train = torch.randperm(len(self.dataObj)).tolist()
-        self.uSet = deepcopy(self.dataObj)
-        self.uSet.targets = self.uSet.targets[indexes_train[:self.unlabelled_size]]
-        self.uSet.data = self.uSet.data[indexes_train[:self.unlabelled_size]]
-        self.dataObj.targets = self.dataObj.targets[indexes_train[self.unlabelled_size:]]
-        self.dataObj.data = self.dataObj.data[indexes_train[self.unlabelled_size:]]
-        self.lSet = deepcopy(self.dataObj)
+        self.uSet = indexes_train[:self.unlabelled_size]
+        self.lSet = indexes_train[self.unlabelled_size:]
 
         self.first_uSet = deepcopy(self.uSet)
         self.first_lSet = deepcopy(self.lSet)
-    
+ 
     def reset_data(self):
         self.uSet = deepcopy(self.first_uSet)
         self.lSet = deepcopy(self.first_lSet)
@@ -77,8 +119,11 @@ class ActiveLearning:
         return torch.utils.data.DataLoader(self.val_data, batch_size=1024, shuffle=False)
     
     def train_loader(self):
-        return torch.utils.data.DataLoader(self.lSet, batch_size=64, shuffle=True, drop_last=True)
+        return torch.utils.data.DataLoader(torch.utils.data.Subset(self.dataObj, self.lSet), batch_size=64, shuffle=True, drop_last=True)
     
+    def unlabelled_loader(self):
+        return torch.utils.data.DataLoader(torch.utils.data.Subset(self.dataObj, self.uSet), batch_size=64, shuffle=False, drop_last=False)
+
     def validate_model(self):
         self.model.eval()
         correct, total = 0, 0
@@ -116,9 +161,11 @@ class ActiveLearning:
         labels = []
         
         # Use a subset of unlabelled data if the dataset is large
+        
         subset_indices = torch.randperm(len(self.uSet))[:sample_size]
-        subset_data = self.uSet.data[subset_indices]
-        subset_targets = self.uSet.targets[subset_indices]
+        selected_indices = torch.tensor(self.uSet)[subset_indices]
+        subset_data = self.dataObj.data[selected_indices]
+        subset_targets = self.dataObj.targets[selected_indices]
 
         with torch.no_grad():
             for image, label in zip(subset_data, subset_targets):
@@ -165,18 +212,16 @@ class ActiveLearning:
             # If no uncertainties are provided (random sampling), use indexes directly
             selected_indexes = indexes[:self.b] if len(indexes) > 25 else indexes
         # Convert list of selected indices to a boolean mask for efficient filtering
-        mask = torch.tensor([i in selected_indexes for i in range(len(self.uSet.targets))])
+        #mask = torch.tensor([i in selected_indexes for i in range(len(self.uSet))])
         # Save selected images and labels before modifying unlabelled_dataset
-        selected_images = self.uSet.data[mask]
-        selected_labels = self.uSet.targets[mask]
+        #selected_images = self.uSet[mask]
         # Add selected unlabelled samples to the labelled training dataset
         print(f" - Labeled images in training set: {len(self.lSet)}")
-        self.lSet.targets = torch.cat([self.lSet.targets, selected_labels])
-        self.lSet.data = torch.cat([self.lSet.data, selected_images])
-        print(f"Adding {len(selected_images)} images to the training set.")
+        self.lSet = np.append(self.lSet, selected_indexes)
+        print(f"Adding {len(selected_indexes)} images to the training set.")
         # Remove the added samples from the unlabelled dataset
-        self.uSet.targets = self.uSet.targets[~mask]
-        self.uSet.data = self.uSet.data[~mask]
+        mask = np.isin(self.uSet, selected_indexes, invert=True)
+        self.uSet = np.array(self.uSet)[mask].tolist()
         # Display added images for "eye test"
         #self.display_added_images(selected_images, selected_labels) # Commented out for now, not working..
         return self.lSet, self.uSet
@@ -184,10 +229,10 @@ class ActiveLearning:
     def uncertainty_labeling(self, top_frac=0.1, batch_size=64):
         self.model.eval()
         predictions = []
-        unlabelled_loader = torch.utils.data.DataLoader(self.uSet, batch_size=batch_size, shuffle=False, drop_last=False)
+
         # Collect predictions for uncertainty
         with torch.no_grad():
-            for images, _ in tqdm(unlabelled_loader):
+            for images, _ in tqdm(self.unlabelled_loader()):
                 images = images.to(self.device)
                 outputs = self.model(images).softmax(dim=1)
                 predictions.extend(outputs.detach().cpu().numpy())
@@ -273,38 +318,47 @@ class ActiveLearning:
         return datapoint_list, accuracy_list, random_datapoint_list, random_accuracy_list
 
 ##############
-# THIS PART DOES NOT WORK FOR THIS VERSION OF THE CODE
+# This is an example of an expansion of the Active Learning class to implement the ProbCover algorithm (Use the same for other expansions, e.g. DCoM)
+# You can also expand on the ActiveLearning class to include more general functions that can be used by all algorithms (such as baseline methods)
+# Or inherit from probcover to include everything
 ##############
 class ProbCover(ActiveLearning):
     #########
     # Create a new constructor to add any new parameters needed for the new algorithm and call the parent constructor
     #########
-    def __init__(self, dataObj, unlabelled_size, label_iterations, num_epochs,criterion=torch.nn.CrossEntropyLoss(), debug=False, lr=0.0005, seed=0, val_split=0.1, b=25, delta=0.8):
+    def __init__(self, dataObj, unlabelled_size, label_iterations, num_epochs,criterion=torch.nn.CrossEntropyLoss(), debug=False, lr=0.0005, seed=0, val_split=0.1, b=25, delta=None, alpha=0.7):
         super().__init__(dataObj, unlabelled_size, label_iterations, num_epochs, criterion, debug, lr, seed, val_split, b)
         
-        self.delta = delta # TODO: Delta needs to be optimized as described in the paper
-        # try:
-        #     self.graph_df = self.construct_graph()
-        # except:
-        #     print('Graph construction failed')
-        self.graph_df = self.construct_graph()
-        print(f'self.delta is {self.delta}')
-        print(f'self.b is {self.b}')
-        print(f'size of training set is {len(self.lSet)}')
-        print(f'size of unlabelled set is {len(self.uSet)}')
-
+        if delta is None:
+            self.approx_delta(alpha)
+        else:
+            self.delta = delta # TODO: Delta needs to be optimized as described in the paper
+            if self.delta <= 0:
+                raise ValueError('Delta must be positive')
+            if self.delta >= 20:
+                print('Warning: Delta is very large, this may lead to a fully connected graph')
+        try:
+            self.graph_df = self.construct_graph()
+        except:
+            raise ValueError('Graph construction failed')
+            
     #########
-    # Custom functions for the new algorithm PROBLEM HERE IS THAT THE GRAPH IS NOT CONSTRUCTED CORRECTLY (SEE algorithm in paper: https://arxiv.org/pdf/2205.11320)
+    # Custom functions for the new algorithm 
     #########
     def construct_graph(self, batch_size=500):
         xs, ys, ds = [], [], []
         # distance computations are done in GPU
-        print(np.concatenate(self.lSet.data, self.uSet.data))
-        cuda_features = torch.tensor(np.concatenate(self.lSet.data, self.uSet.data)).cuda() # TODO:Should include lSet as well as uSet
-        #cuda_features = cuda_features.permute(1, 0, 2)
-        cuda_features = cuda_features.reshape(cuda_features.shape[1], -1) # Flatten the images TODO:(SHOULD be done dynamically)
-        for i in range(len(self.uSet) // batch_size):
-            cur_features = cuda_features[i * batch_size:(i + 1) * batch_size,:]
+        combined_indices = torch.tensor(np.append(self.lSet, self.uSet))
+        subset_dataset = torch.utils.data.Subset(self.dataObj, combined_indices)
+
+        cuda_features = torch.stack([img for img, _ in subset_dataset]).cuda()
+        # Reshape images to 2D format (N, 784) for distance computation
+        cuda_features = cuda_features.reshape(cuda_features.shape[0], -1)
+        # Normalize features
+        cuda_features = F.normalize(cuda_features, p=2, dim=1)
+
+        for i in range(len(cuda_features) // batch_size):
+            cur_features = cuda_features[i * batch_size:(i + 1) * batch_size]
             dists = torch.cdist(cur_features.float(), cuda_features.float())
             mask = dists < self.delta
             x,y = mask.nonzero().T
@@ -318,19 +372,119 @@ class ProbCover(ActiveLearning):
 
         # Create a sparse DataFrame to represent the graph
         return pd.DataFrame({'x': xs, 'y': ys, 'd': ds})
+    
+    def approx_delta(self, alpha=0.95, max_delta=1, min_delta=0.01, random_shuffle=True):
+        """
+        Approximate optimal delta using k-means clustering as pseudo-labels.
+        delta* = max{delta : purity(delta) >= alpha}
+        
+        Args:
+            alpha: Purity threshold (default 0.95)
+            max_delta: Maximum delta to test (default 1)
+            min_delta: Minimum delta to test (default 0.001)
+            random_shuffle: Whether to shuffle deltas for efficient search (default False)
+        """
+        print(f"Approximating delta for purity > {alpha}")
+        
+        # Prepare features and labels
+        features = self.dataObj.data[torch.tensor(self.uSet)].reshape(len(self.uSet), -1).float()
+        features = F.normalize(features, p=2, dim=1).to(self.device) # Normalize features 
+        if self.debug:
+            labels = self.dataObj.targets[torch.tensor(self.uSet)].to(self.device)
+        else:
+            # Use k-means clustering as pseudo-labels
+            unique_labels = len(self.dataObj.targets.unique())
+            labels, _ = kmeans_torch(features, k=unique_labels)
+            labels = labels.to(self.device)
+        
+        # Process in smaller chunks
+        chunk_size = 1000  # Reduce memory usage
+        num_points = len(features)
+        purities = []
+        
+        deltas = np.linspace(min_delta, max_delta, 50)
+        if random_shuffle:
+            np.random.shuffle(deltas)
+            cur_peak = 0
+            cur_valley = 1
+        
+        for delta in tqdm(deltas, desc=f'Testing delta '):
+            if random_shuffle and delta < cur_peak:
+                purities.append(1.5)
+                #tqdm.write(f'Delta: {delta:.3f}, Purity: skipped')
+                continue
+            elif random_shuffle and delta > cur_valley:
+                purities.append(0.0)
+                #tqdm.write(f'Delta: {delta:.3f}, Purity: skipped')
+                continue
+            chunk_purities = []
+            
+            # Process chunks of points
+            for i in range(0, num_points, chunk_size):
+                end_idx = min(i + chunk_size, num_points)
+                chunk_features = features[i:end_idx]
+                
+                # Calculate distances for current chunk
+                dists = torch.cdist(chunk_features, features)
+                mask = dists < delta
+                
+                # Get labels for neighbors
+                chunk_labels = labels[i:end_idx].unsqueeze(1)
+                neighbor_labels = labels.unsqueeze(0).expand(end_idx - i, -1)
+                
+                # Calculate purity for chunk
+                same_label = (chunk_labels == neighbor_labels) & mask
+                chunk_purity = (same_label.sum(1).float() / mask.sum(1).clamp(min=1)).mean()
+                chunk_purities.append(chunk_purity.item())
+                
+            # Average purity across chunks
+            purity = np.mean(chunk_purities)
+            purities.append(purity)
+
+            if random_shuffle and purity >= alpha:
+                cur_peak = delta
+            elif random_shuffle and purity < alpha - 0.2:
+                cur_valley = delta 
+            
+            tqdm.write(f'Delta: {delta:.3f}, Purity: {purity:.3f}')
+        
+        # Select optimal delta
+        purities = np.array(purities)
+        valid_deltas = deltas[purities >= alpha]
+        self.delta = np.max(valid_deltas) if len(valid_deltas) > 0 else min_delta
+        
+        print(f'Selected delta: {self.delta:.3f}')
+        #self.visualize_deltas(deltas, purities, random_shuffle)
+        return self.delta
+    
+    def visualize_deltas(self, deltas, purities, random_shuffle=False):
+        if random_shuffle:
+            # Sort deltas and set all purities that are above 1 to the closest value below 1
+            deltas, purities = zip(*sorted(zip(deltas, purities)))
+            purities = np.minimum.accumulate(purities[::-1])[::-1]
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(deltas, purities, label='Purity')
+        plt.axvline(self.delta, color='r', linestyle='--', label='Selected Delta')
+        plt.xlabel('Delta')
+        plt.ylabel('Purity')
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
 
     #########
     # Create a label iteration function for the new algorithm
     #########
     def prob_cover_labeling(self):
+        combined_indices = torch.tensor(np.append(self.lSet, self.uSet))
         selected = []
-        edge_from_seen = np.isin(self.graph_df.x, np.arrange(len(self.lSet.targets)))
+        edge_from_seen = np.isin(self.graph_df.x, np.arange(len(self.lSet)))
         covered_samples = self.graph_df.y[edge_from_seen].unique()
         cur_df = self.graph_df[(~np.isin(self.graph_df.y, covered_samples))]
         for i in range(self.b):
-            coverage = len(covered_samples) / len(self.uSet)
+            coverage = len(covered_samples) / len(combined_indices)
             # Select samples with the highest degree
-            degrees = np.bincount(cur_df.x, minlength=len(self.uSet))
+            degrees = np.bincount(cur_df.x, minlength=len(combined_indices))
             print(f'Iteration is {i}.\tGraph has {len(cur_df)} edges.\tMax degree is {degrees.max()}.\tCoverage is {coverage:.3f}')
             cur = degrees.argmax() # Here the paper uses random selection and their code uses this.
 
