@@ -55,10 +55,10 @@ def kmeans_torch(x, k, num_iters=100, tol=1e-4):
 
 class ActiveLearning:
     def __init__(self, dataObj, unlabelled_size, label_iterations, num_epochs,criterion=torch.nn.CrossEntropyLoss(), debug=False, lr=0.0005, seed=0, val_split=0.1, b=25):
-        self.dataObj = deepcopy(dataObj) # This is the dataset that is passed to the class (MNIST in this case and with val removed)
-        self.unlabelled_size = unlabelled_size # The size of the unlabelled dataset in percentage of the total dataset (minus validation)
-        self.label_iterations = label_iterations # Number of iterations for active learning
-        self.debug = debug # Debug mode for faster training
+        self.dataObj = deepcopy(dataObj)            # This is the dataset that is passed to the class (MNIST in this case and with val removed)
+        self.unlabelled_size = unlabelled_size      # The size of the unlabelled dataset in percentage of the total dataset (minus validation)
+        self.label_iterations = label_iterations    # Number of iterations for active learning
+        self.debug = debug                          # Debug mode for faster training
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') # Use GPU if available
         torch.manual_seed(seed)     # Set seed for reproducibility
         self.val_data = None        # Validation data (NOT INDEX)
@@ -66,11 +66,11 @@ class ActiveLearning:
         self.uSet = None            # Unlabelled data Indices
         self.lSet = None            # Labelled data Indices
 
-        self.first_uSet = None # Initial unlabelled data Indices
-        self.first_lSet = None # Initial labelled data Indices
+        self.first_uSet = None      # Initial unlabelled data Indices
+        self.first_lSet = None      # Initial labelled data Indices
 
         self.num_epochs = num_epochs # Number of epochs for training
-        self.b = b # Budget for each iteration of active learning
+        self.b = b                  # Budget for each iteration of active learning
 
         self.model = torchvision.models.resnet18(weights=False)
         self.model.fc = torch.nn.Linear(self.model.fc.in_features, 10)
@@ -90,6 +90,10 @@ class ActiveLearning:
         self.init_data(val_split)
         
     def init_data(self, val_split=0.1):
+        """ Initialize the data for active learning by splitting into training and validation sets 
+        Args:
+            val_split: Validation split percentage
+        """
         self.val_data = deepcopy(self.dataObj)
         train_size = int((1 - val_split) * len(self.dataObj))
         val_size = len(self.dataObj) - train_size
@@ -112,19 +116,34 @@ class ActiveLearning:
         self.first_lSet = deepcopy(self.lSet)
  
     def reset_data(self):
+        """ Reset the data to the initial state for the next active learning method"""
         self.uSet = deepcopy(self.first_uSet)
         self.lSet = deepcopy(self.first_lSet)
+        self.model.load_state_dict(self.model_parameters)
 
     def val_loader(self):
+        """ Return validation data loader for model evaluation
+        Returns:
+            DataLoader: Validation data loader
+        """
         return torch.utils.data.DataLoader(self.val_data, batch_size=1024, shuffle=False)
     
     def train_loader(self):
+        """ Return training data loader for active learning iterations
+        Returns:
+            DataLoader: Training data loader
+        """
         return torch.utils.data.DataLoader(torch.utils.data.Subset(self.dataObj, self.lSet), batch_size=64, shuffle=True, drop_last=True)
     
     def unlabelled_loader(self):
+        """ Return unlabelled data loader for active learning iterations 
+        Returns:
+            DataLoader: Unlabelled data loader
+        """
         return torch.utils.data.DataLoader(torch.utils.data.Subset(self.dataObj, self.uSet), batch_size=64, shuffle=False, drop_last=False)
 
     def validate_model(self):
+        """ Validate the model on the validation set and return accuracy """
         self.model.eval()
         correct, total = 0, 0
         with torch.no_grad():
@@ -137,6 +156,11 @@ class ActiveLearning:
         return 100 * correct / total
 
     def train_model(self,val_interval=1, description=""):
+        """ Train the model for a specified number of epochs and return validation accuracies
+        Args:
+            val_interval: Interval for validation checks
+            description: Description for the training run
+        """
         accuracies = []
         print(f"Starting training: {description}")
         for epoch in tqdm(range(self.num_epochs)):
@@ -156,6 +180,10 @@ class ActiveLearning:
         return accuracies
     
     def visualize_decision_boundaries(self, sample_size=500):
+        """ Visualize decision boundaries using t-SNE for dimensionality reduction 
+        Args:
+            sample_size: Number of samples to use for visualization
+        """
         self.model.eval()
         embeddings = []
         labels = []
@@ -202,31 +230,28 @@ class ActiveLearning:
         plt.tight_layout()
         plt.show()
     
-    def transfer_unlabelled_to_labelled(self, indexes, uncertainties=None):
-        # If uncertainties are provided, sort indexes by uncertainty
-        if uncertainties is not None:
-            # Sort indexes by uncertainty, selecting the top uncertain samples (up to b)
-            sorted_indexes = [idx for _, idx in sorted(zip(uncertainties, indexes), reverse=True)]
-            selected_indexes = sorted_indexes[:self.b]  # Top uncertain samples, max b
-        else:
-            # If no uncertainties are provided (random sampling), use indexes directly
-            selected_indexes = indexes[:self.b] if len(indexes) > 25 else indexes
-        # Convert list of selected indices to a boolean mask for efficient filtering
-        #mask = torch.tensor([i in selected_indexes for i in range(len(self.uSet))])
-        # Save selected images and labels before modifying unlabelled_dataset
-        #selected_images = self.uSet[mask]
-        # Add selected unlabelled samples to the labelled training dataset
+    def transfer_unlabelled_to_labelled(self, indexes):
+        """ Transfer unlabelled samples to labelled dataset
+        Args:
+            indexes: List of indices to transfer from unlabelled to labelled dataset
+            uncertainties: List of uncertainties for each sample
+        """
         print(f" - Labeled images in training set: {len(self.lSet)}")
-        self.lSet = np.append(self.lSet, selected_indexes)
-        print(f"Adding {len(selected_indexes)} images to the training set.")
-        # Remove the added samples from the unlabelled dataset
-        mask = np.isin(self.uSet, selected_indexes, invert=True)
+        self.lSet = np.append(self.lSet, indexes)
+        print(f"Adding {len(indexes)} images to the training set.")
+        mask = np.isin(self.uSet, indexes, invert=True)
         self.uSet = np.array(self.uSet)[mask].tolist()
         # Display added images for "eye test"
         #self.display_added_images(selected_images, selected_labels) # Commented out for now, not working..
-        return self.lSet, self.uSet
     
     def uncertainty_labeling(self, top_frac=0.1, batch_size=64):
+        """ Label unlabelled samples based on uncertainty sampling
+        Args:
+            top_frac: Fraction of top uncertain samples to select
+            batch_size: Batch size for processing unlabelled samples
+        """
+        __name__ = "Uncertainty Sampling"
+
         self.model.eval()
         predictions = []
 
@@ -242,13 +267,10 @@ class ActiveLearning:
         uncertainties, top_indices = predictions.max(-1)[0].topk(top_percent, largest=False)
         # print(f"Adding {len(top_indices)} images to training set for Active Learning.")
         # Pass both top_indices and uncertainties to transfer_unlabelled_to_labelled
-        self.transfer_unlabelled_to_labelled(indexes=top_indices, uncertainties=uncertainties)
+        sorted_indexes = [idx for _, idx in sorted(zip(uncertainties, top_indices), reverse=True)]
+        selected_indexes = sorted_indexes[:self.b]
+        self.transfer_unlabelled_to_labelled(indexes=selected_indexes)
         self.visualize_decision_boundaries()
-
-    def random_sampling_iteration(self, sample_size):
-        random_indices = torch.randperm(len(self.uSet))[:sample_size]
-        print(f"Adding {len(random_indices)} images to training set for Random Sampling.")
-        return random_indices
 
     def Al_Loop(self, function, title="Uncertainty Sampling"):
     # Active Learning Loop
@@ -262,60 +284,52 @@ class ActiveLearning:
             datapoint_list.append(len(self.lSet))
             accuracy_list.append(accuracies)
             if i < self.label_iterations - 1:
-                function()
+                function(self)
                 print(f"After AL iteration {i + 1}:")
                 print(f" - Labeled images in training set: {len(self.lSet)}")
                 print(f" - Remaining unlabeled images in unlabeled set: {len(self.uSet)}")
+            self.visualize_decision_boundaries()
         self.reset_data()
         return datapoint_list, accuracy_list
     
-    def random_sampling(self,top_frac=0.1):
-        datapoint_list = []  # Stores number of labeled data points over iterations for random sampling
-        accuracy_list = []  # Stores accuracy at each iteration for random sampling
-        for i in range(self.label_iterations):
-            description = f"Random Sampling Iteration {i + 1}"
-            self.model.load_state_dict(self.model_parameters)  # Reset model to initial state for fair comparison
-            # Train model and store accuracies for random sampling method
-            accuracies = self.train_model(val_interval=10, description=description)
-            datapoint_list.append(len(self.lSet))
-            accuracy_list.append(accuracies)
-            
-            # Perform random sampling to add new samples to the labeled dataset
-            if i < self.label_iterations - 1:
-                random_indices = self.random_sampling_iteration(int(top_frac * len(self.uSet)))
-                self.transfer_unlabelled_to_labelled(random_indices)
-                print(f"After Random Sampling iteration {i + 1}:")
-                print(f" - Labeled images in training set: {len(self.lSet)}")
-                print(f" - Remaining unlabeled images in unlabeled set: {len(self.uSet)}")
-                self.visualize_decision_boundaries()  # Visualize decision boundaries after adding random samples
-        self.reset_data()
-        return datapoint_list, accuracy_list
-    
-    def compare_methods(self,no_plot=False):
-        # Run Active Learning Loop
-        datapoint_list, accuracy_list = self.Al_Loop(self.uncertainty_labeling)
-        # Run Random Sampling Loop
-        random_datapoint_list, random_accuracy_list = self.random_sampling()
+    def random_sampling(self, sample_size=None):
+        """ Randomly sample from the unlabelled dataset for random sampling
+        Args:
+            sample_size: Number of samples to randomly sample
+        Returns:
+            List: Randomly sampled indices from unlabelled dataset"""
         
-        # Plotting the accuracy results for all three methods
-        datapoints = np.array(datapoint_list)  # Data points for active learning
-        accuracies = np.array(accuracy_list).max(-1)  # Max accuracy per iteration for active learning
-        random_datapoints = np.array(random_datapoint_list)  # Data points for random sampling
-        random_accuracies = np.array(random_accuracy_list).max(-1)  # Max accuracy per iteration for random sampling
+        if sample_size is None:
+            sample_size = self.b
+        random_indices = torch.randperm(len(self.uSet))[:sample_size]
+        print(f"Adding {len(random_indices)} images to training set for Random Sampling.")
+        self.transfer_unlabelled_to_labelled(random_indices)
+        return random_indices
+    
+    def compare_methods(self, methods=[uncertainty_labeling, random_sampling], no_plot=False):
+        # Run Active Learning Loop
+        datapoint_lists, accuracy_lists = [], []
+        for method in methods:
+            datapoint_list, accuracy_list = self.Al_Loop(method, title=method.__name__)
+            datapoint_lists.append(np.array(datapoint_list))
+            accuracy_lists.append(np.array(accuracy_list).max(-1))
 
+        # Plotting the accuracy results for all three methods
         if no_plot:
-            return datapoint_list, accuracy_list, random_datapoint_list, random_accuracy_list
-        # Create a plot showing Active Learning, Random Sampling
+            return datapoint_lists, accuracy_lists
+    
         plt.figure(figsize=(10, 5))
-        plt.plot(datapoints, accuracies, label='Active Learning Accuracy')
-        plt.plot(random_datapoints, random_accuracies, label='Random Sampling Accuracy', linestyle='--')
+        for i, method in enumerate(methods):
+            plt.plot(datapoint_lists[i], accuracy_lists[i], label=method.__name__)
         plt.xlabel('Datapoints')
         plt.ylabel('Accuracy')
         plt.legend()
         plt.tight_layout()
         plt.show()
-        # TODO: Add baseline method for comparison
-        return datapoint_list, accuracy_list, random_datapoint_list, random_accuracy_list
+        return datapoint_lists, accuracy_lists
+        #TODO: ADD BASELINE METHODS
+    random_sampling.__name__ = "Random Sampling"
+    uncertainty_labeling.__name__ = "Uncertainty Sampling"
 
 ##############
 # This is an example of an expansion of the Active Learning class to implement the ProbCover algorithm (Use the same for other expansions, e.g. DCoM)
@@ -335,7 +349,7 @@ class ProbCover(ActiveLearning):
             self.delta = delta # TODO: Delta needs to be optimized as described in the paper
             if self.delta <= 0:
                 raise ValueError('Delta must be positive')
-            if self.delta >= 20:
+            if self.delta >= 1:
                 print('Warning: Delta is very large, this may lead to a fully connected graph')
         try:
             self.graph_df = self.construct_graph()
@@ -346,6 +360,12 @@ class ProbCover(ActiveLearning):
     # Custom functions for the new algorithm 
     #########
     def construct_graph(self, batch_size=500):
+        """ Construct a graph based on the distance between unlabelled and labelled samples
+        Args:
+            batch_size: Batch size for processing samples
+        Returns:
+            DataFrame: Graph representation with columns x, y, d
+        """
         xs, ys, ds = [], [], []
         # distance computations are done in GPU
         combined_indices = torch.tensor(np.append(self.lSet, self.uSet))
@@ -458,6 +478,12 @@ class ProbCover(ActiveLearning):
         return self.delta
     
     def visualize_deltas(self, deltas, purities, random_shuffle=False):
+        """ Visualize purities for different deltas
+        Args:
+            deltas: List of deltas
+            purities: List of purities
+            random_shuffle: Whether deltas were shuffled
+        """
         if random_shuffle:
             # Sort deltas and set all purities that are above 1 to the closest value below 1
             deltas, purities = zip(*sorted(zip(deltas, purities)))
@@ -476,6 +502,7 @@ class ProbCover(ActiveLearning):
     # Create a label iteration function for the new algorithm
     #########
     def prob_cover_labeling(self):
+        """ Label unlabelled samples based on the ProbCover algorithm """
         combined_indices = torch.tensor(np.append(self.lSet, self.uSet))
         selected = []
         edge_from_seen = np.isin(self.graph_df.x, np.arange(len(self.lSet)))
@@ -503,34 +530,19 @@ class ProbCover(ActiveLearning):
         self.transfer_unlabelled_to_labelled(selected)
         self.visualize_decision_boundaries()
 
-    #########
-    # Extend the compare_methods function to include the new algorithm and plot the results
-    #########
-    def compare_methods(self, no_plot=False):
+    ###########
+    # Include the new method in the compare_methods function and add the old methods to the list
+    ###########
+    def uncertainty_labeling(self, top_frac=0.1, batch_size=64):
+        return super().uncertainty_labeling(top_frac, batch_size)
+    def random_sampling(self, sample_size=None):
+        return super().random_sampling(sample_size)
+    def compare_methods(self, methods=[uncertainty_labeling, random_sampling, prob_cover_labeling], no_plot=False):
+        return super().compare_methods(methods, no_plot)
     
-        prob_data_lsit, prob_accuracy_list = self.Al_Loop(self.prob_cover_labeling, title="ProbCover")
-
-        datapoint_list, accuracy_list, random_datapoint_list, random_accuracy_list = super().compare_methods(no_plot=True)
-
-        # Plotting the accuracy results for all three methods
-        datapoints = np.array(datapoint_list)
-        accuracies = np.array(accuracy_list).max(-1)
-        random_datapoints = np.array(random_datapoint_list)
-        random_accuracies = np.array(random_accuracy_list).max(-1)
-        prob_datapoints = np.array(prob_data_lsit)
-        prob_accuracies = np.array(prob_accuracy_list).max(-1)
-
-        if no_plot:
-            return datapoint_list, accuracy_list, random_datapoint_list, random_accuracy_list, prob_data_lsit, prob_accuracy_list
-
-        # Create a plot showing Active Learning, Random Sampling, and ProbCover
-        plt.figure(figsize=(10, 5))
-        plt.plot(datapoints, accuracies, label='Active Learning Accuracy')
-        plt.plot(random_datapoints, random_accuracies, label='Random Sampling Accuracy', linestyle='--')
-        plt.plot(prob_datapoints, prob_accuracies, label='ProbCover Accuracy', linestyle='-.')
-        plt.xlabel('Datapoints')
-        plt.ylabel('Accuracy')
-        plt.legend()
-        plt.tight_layout()
-        plt.show()
-        return datapoint_list, accuracy_list, random_datapoint_list, random_accuracy_list, prob_data_lsit, prob_accuracy_list
+    #########
+    # Rename the methods for better visualization
+    #########
+    random_sampling.__name__ = "Random Sampling"
+    uncertainty_labeling.__name__ = "Uncertainty Sampling"
+    prob_cover_labeling.__name__ = "ProbCover"
