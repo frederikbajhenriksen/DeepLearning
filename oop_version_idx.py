@@ -6,8 +6,14 @@ from tqdm import tqdm  # For displaying progress bars during training
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE  # For visualizing decision boundaries
 import pandas as pd
-from sklearn.cluster import KMeans
+#from sklearn.cluster import KMeans
 import torch.nn.functional as F
+
+def set_name(name):
+    def decorator(func):
+        func.__name__ = name
+        return func
+    return decorator
 
 # TODO: Make faster or import from a library faiss
 def kmeans_torch(x, k, num_iters=100, tol=1e-4):
@@ -244,6 +250,7 @@ class ActiveLearning:
         # Display added images for "eye test"
         #self.display_added_images(selected_images, selected_labels) # Commented out for now, not working..
     
+    @set_name("Uncertainty Sampling")
     def uncertainty_labeling(self, top_frac=0.1, batch_size=64):
         """ Label unlabelled samples based on uncertainty sampling
         Args:
@@ -292,6 +299,7 @@ class ActiveLearning:
         self.reset_data()
         return datapoint_list, accuracy_list
     
+    @set_name("Random Sampling")
     def random_sampling(self, sample_size=None):
         """ Randomly sample from the unlabelled dataset for random sampling
         Args:
@@ -328,8 +336,6 @@ class ActiveLearning:
         plt.show()
         return datapoint_lists, accuracy_lists
         #TODO: ADD BASELINE METHODS
-    random_sampling.__name__ = "Random Sampling"
-    uncertainty_labeling.__name__ = "Uncertainty Sampling"
 
 ##############
 # This is an example of an expansion of the Active Learning class to implement the ProbCover algorithm (Use the same for other expansions, e.g. DCoM)
@@ -501,6 +507,7 @@ class ProbCover(ActiveLearning):
     #########
     # Create a label iteration function for the new algorithm
     #########
+    @set_name("ProbCover")
     def prob_cover_labeling(self):
         """ Label unlabelled samples based on the ProbCover algorithm """
         combined_indices = torch.tensor(np.append(self.lSet, self.uSet))
@@ -533,16 +540,12 @@ class ProbCover(ActiveLearning):
     ###########
     # Include the new method in the compare_methods function and add the old methods to the list
     ###########
+    @set_name("Uncertainty Sampling")
     def uncertainty_labeling(self, top_frac=0.1, batch_size=64):
         return super().uncertainty_labeling(top_frac, batch_size)
+    @set_name("Random Sampling")
     def random_sampling(self, sample_size=None):
         return super().random_sampling(sample_size)
     def compare_methods(self, methods=[uncertainty_labeling, random_sampling, prob_cover_labeling], no_plot=False):
         return super().compare_methods(methods, no_plot)
     
-    #########
-    # Rename the methods for better visualization
-    #########
-    random_sampling.__name__ = "Random Sampling"
-    uncertainty_labeling.__name__ = "Uncertainty Sampling"
-    prob_cover_labeling.__name__ = "ProbCover"
