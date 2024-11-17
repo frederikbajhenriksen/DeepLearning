@@ -257,8 +257,6 @@ class ActiveLearning:
             top_frac: Fraction of top uncertain samples to select
             batch_size: Batch size for processing unlabelled samples
         """
-        __name__ = "Uncertainty Sampling"
-
         self.model.eval()
         predictions = []
 
@@ -276,6 +274,66 @@ class ActiveLearning:
         # Pass both top_indices and uncertainties to transfer_unlabelled_to_labelled
         sorted_indexes = [idx for _, idx in sorted(zip(uncertainties, top_indices), reverse=True)]
         selected_indexes = sorted_indexes[:self.b]
+        self.transfer_unlabelled_to_labelled(indexes=selected_indexes)
+        self.visualize_decision_boundaries()
+
+    @set_name("Least Confidence")
+    def least_confidence(self,top_frac=0.1):
+        self.model.eval()
+        predictions = []
+
+        # Collect predictions for uncertainty
+        with torch.no_grad():
+            for images, _ in tqdm(self.unlabelled_loader()):
+                images = images.to(self.device)
+                outputs = self.model(images).softmax(dim=1)
+                predictions.extend(outputs.detach().cpu().numpy())
+        predictions = torch.tensor(predictions)
+        top_percent = int(top_frac * len(predictions))
+        # Calculate uncertainties as the top confidence of each prediction
+            # Least confidence sampling: Select samples with the highest uncertainty (lowest max probability)
+        uncertainties, top_indices = predictions.max(dim=1)  # Get max probability and its indices
+        top_indices = uncertainties.topk(top_percent, largest=False).indices  # Select least confident samples
+        selected_indexes = top_indices[:self.b]
+        self.transfer_unlabelled_to_labelled(indexes=selected_indexes)
+        self.visualize_decision_boundaries()
+
+    @set_name("Margin Sampling")
+    def margin_sampling(self,top_frac=0.1):
+        self.model.eval()
+        predictions = []
+
+        # Collect predictions for uncertainty
+        with torch.no_grad():
+            for images, _ in tqdm(self.unlabelled_loader()):
+                images = images.to(self.device)
+                outputs = self.model(images).softmax(dim=1)
+                predictions.extend(outputs.detach().cpu().numpy())
+        top_percent = int(top_frac * len(predictions))
+        predictions = torch.tensor(predictions)
+        sorted_preds, _ = predictions.topk(2, dim=1)  # Get top two predictions for each sample
+        margin = sorted_preds[:, 0] - sorted_preds[:, 1]  # Calculate margin (difference)
+        top_indices = margin.topk(top_percent, largest=False).indices  # Select smallest margins
+        selected_indexes = top_indices[:self.b]
+        self.transfer_unlabelled_to_labelled(indexes=selected_indexes)
+        self.visualize_decision_boundaries()
+    
+    @set_name("Entropy Sampling")
+    def entropy_sampling(self,top_frac=0.1):
+        self.model.eval()
+        predictions = []
+
+        # Collect predictions for uncertainty
+        with torch.no_grad():
+            for images, _ in tqdm(self.unlabelled_loader()):
+                images = images.to(self.device)
+                outputs = self.model(images).softmax(dim=1)
+                predictions.extend(outputs.detach().cpu().numpy())
+        top_percent = int(top_frac * len(predictions))
+        predictions = torch.tensor(predictions)
+        entropy = -torch.sum(predictions * torch.log(predictions + 1e-10), dim=1)
+        top_indices = entropy.topk(top_percent, largest=True).indices
+        selected_indexes = top_indices[:self.b]
         self.transfer_unlabelled_to_labelled(indexes=selected_indexes)
         self.visualize_decision_boundaries()
 
@@ -314,7 +372,7 @@ class ActiveLearning:
         self.transfer_unlabelled_to_labelled(random_indices)
         return random_indices
     
-    def compare_methods(self, methods=[uncertainty_labeling, random_sampling], no_plot=False):
+    def compare_methods(self, methods=[uncertainty_labeling, random_sampling, least_confidence, margin_sampling, entropy_sampling], no_plot=False):
         # Run Active Learning Loop
         datapoint_lists, accuracy_lists = [], []
         for method in methods:
