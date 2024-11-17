@@ -598,12 +598,166 @@ class ProbCover(ActiveLearning):
     ###########
     # Include the new method in the compare_methods function and add the old methods to the list
     ###########
+    @set_name("Least Confidence")
+    def least_confidence(self,top_frac=0.1):
+        return super().least_confidence(top_frac)
+    @set_name("Margin Sampling")
+    def margin_sampling(self,top_frac=0.1):
+        return super().margin_sampling(top_frac)
+    @set_name("Entropy Sampling")
+    def entropy_sampling(self,top_frac=0.1):
+        return super().entropy_sampling(top_frac)
     @set_name("Uncertainty Sampling")
     def uncertainty_labeling(self, top_frac=0.1, batch_size=64):
         return super().uncertainty_labeling(top_frac, batch_size)
     @set_name("Random Sampling")
     def random_sampling(self, sample_size=None):
         return super().random_sampling(sample_size)
-    def compare_methods(self, methods=[uncertainty_labeling, random_sampling, prob_cover_labeling], no_plot=False):
+    def compare_methods(self, methods=[uncertainty_labeling, random_sampling, prob_cover_labeling, least_confidence, margin_sampling, entropy_sampling], no_plot=False):
         return super().compare_methods(methods, no_plot)
-    
+
+
+
+# ######################################################################
+# # TYPICLUST
+# ######################################################################
+from sklearn.cluster import MiniBatchKMeans, KMeans
+from sklearn.neighbors import NearestNeighbors
+
+
+def get_nn(features, num_neighbors):
+    """Calculate nearest neighbors using scikit-learn on CPU."""
+    nbrs = NearestNeighbors(n_neighbors=num_neighbors + 1, algorithm='auto').fit(features)
+    distances, indices = nbrs.kneighbors(features)
+    return distances[:, 1:], indices[:, 1:]
+
+def calculate_typicality(features, num_neighbors):
+    """Calculate typicality based on the mean distance to nearest neighbors."""
+    distances, _ = get_nn(features, num_neighbors)
+    mean_distance = distances.mean(axis=1)
+    typicality = 1 / (mean_distance + 1e-5)  # Higher density = higher typicality
+    return typicality
+
+class TypiClust(ActiveLearning):
+    # RASMUS QUESTIONS: 
+    # 1. hvorfor vælger vi typical samples før vi træner modellen?
+    # 2. hvorfor bruger vi resnet18 til at udregne features?
+    # 3. Can vi ikke bare bruge den rå data?
+    # tror problemmet ligger i extract_features, 
+    # hvis jeg må vil jeg gerne prøve at lave en ny metode der tager 
+    # rå data og udregner features på den måde jeg gør det i ProbCover
+
+
+    MAX_NUM_CLUSTERS = 500  # Example value, adjust as needed
+    MIN_CLUSTER_SIZE = 5    # Example value, adjust as needed
+    K_NN = 20               # Number of neighbors for density calculation
+
+    def __init__(self, dataObj, unlabelled_size, label_iterations, num_epochs, criterion=torch.nn.CrossEntropyLoss(), debug=False, lr=0.0005, seed=0, val_split=0.1, b=25, k=10):
+        # Call the parent constructor
+        super().__init__(dataObj, unlabelled_size, label_iterations, num_epochs, criterion, debug, lr, seed, val_split, b)
+        self.k = k  # Number of clusters for TypiClust
+        self.seed = seed  # Set the seed attribute
+
+        # Perform clustering and select initial samples
+        self.centroids, self.labels = self.perform_clustering()
+        self.typical_samples = self.select_typical_samples()
+
+    def perform_clustering(self):
+        """ Cluster the data using K-means and return centroids and labels """
+        num_clusters = min(len(self.lSet) + self.b, self.MAX_NUM_CLUSTERS)
+        if num_clusters <= 50:
+            kmeans = KMeans(n_clusters=num_clusters, random_state=0)
+        else:
+            kmeans = MiniBatchKMeans(n_clusters=num_clusters, batch_size=5000, random_state=0)
+
+        features = self.extract_features(self.dataObj.data[self.uSet])
+        print("features extracted")
+        labels = kmeans.fit_predict(features)
+        return kmeans.cluster_centers_, labels
+
+    def extract_features(self, data): # TODO: DEN HER!
+        """ Extract features from the data using a pre-trained model (why not use the model from the parent class?) """
+        model = torchvision.models.resnet18(pretrained=True)  # Use pre-trained weights
+        model.eval()
+
+        features = []
+        with torch.no_grad():
+            for img in data:
+                img = img.unsqueeze(0).repeat(1, 3, 1, 1)  # Convert grayscale to RGB
+                img = F.interpolate(img, size=(224, 224))  # Resize to 224x224
+                img = img / 255.0  # Normalize to [0, 1]
+                feature = model(img)
+                features.append(feature.squeeze().cpu().numpy())
+
+        return np.array(features)
+
+    def select_typical_samples(self):
+        """ Select typical samples from each cluster based on density """
+        # relevant_indices = np.concatenate([self.lSet, self.uSet]).astype(int)
+        # features = self.extract_features(self.dataObj.data[relevant_indices])
+        # labels = np.copy(self.labels[relevant_indices])
+
+        features = self.extract_features(self.dataObj.data[self.uSet])
+        labels = np.copy(self.labels)
+        
+        # Handle minimum cluster size and sorting
+        cluster_ids, cluster_sizes = np.unique(labels, return_counts=True)
+        clusters_df = pd.DataFrame({
+            'cluster_id': cluster_ids,
+            'cluster_size': cluster_sizes,
+            'neg_cluster_size': -1 * cluster_sizes
+        })
+        clusters_df = clusters_df[clusters_df.cluster_size > self.MIN_CLUSTER_SIZE]
+        clusters_df = clusters_df.sort_values(['neg_cluster_size'])
+
+        typical_samples = []
+        for i in range(self.b):
+            cluster = clusters_df.iloc[i % len(clusters_df)].cluster_id
+            indices = np.where(labels == cluster)[0]
+            rel_feats = features[indices]
+            typicality = calculate_typicality(rel_feats, min(self.K_NN, len(indices) // 2))
+            idx = indices[typicality.argmax()]
+            typical_samples.append(idx)
+
+        return typical_samples
+    #########
+    # Create a label iteration function for TypiClust
+    #########
+    @set_name("TypiClust")
+    def typiclust_labeling(self):
+        """ Label unlabelled samples based on the TypiClust algorithm """
+
+        print("Starting TypiClust labeling...")
+        
+        # Ensure we have typical samples selected using TypiClust
+        selected = self.typical_samples
+        print(f"Number of typical samples: {len(self.typical_samples)}")
+
+        # Iterate through and select samples to be labeled
+        if len(selected) > self.b:
+            selected = selected[:self.b]  # Select only the required number of samples
+        print(f"Selected {len(selected)} samples using TypiClust for labeling.")
+
+        # Transfer selected samples from unlabelled to labelled
+        self.transfer_unlabelled_to_labelled(selected)
+        self.visualize_decision_boundaries()
+
+    ###########
+    # Include the new method in the compare_methods function and add the old methods to the list
+    ###########
+    @set_name("Uncertainty Sampling")
+    def uncertainty_labeling(self, top_frac=0.1, batch_size=64):
+        return super().uncertainty_labeling(top_frac, batch_size)
+
+    @set_name("Random Sampling")
+    def random_sampling(self, sample_size=None):
+        return super().random_sampling(sample_size)
+
+    # def compare_methods(self, methods=[uncertainty_labeling, random_sampling ,typiclust_labeling], no_plot=False):
+    #     return super().compare_methods(methods, no_plot)
+
+    def compare_methods(self, methods=[typiclust_labeling, uncertainty_labeling, random_sampling], no_plot=False):
+        for method in methods:
+            print(f"Running method: {method.__name__}")
+            self.reset_data()  # Reset data before running each method
+            method(self)  # Call the active learning method
