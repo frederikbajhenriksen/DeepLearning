@@ -752,5 +752,194 @@ class TypiClust(ActiveLearning):
     def random_sampling(self, sample_size=None):
         return super().random_sampling(sample_size)
 
-    def compare_methods(self, methods=[uncertainty_labeling, random_sampling ,typiclust_labeling], no_plot=False):
-        return super().compare_methods(methods, no_plot)
+    # def compare_methods(self, methods=[uncertainty_labeling, random_sampling ,typiclust_labeling], no_plot=False):
+    #     return super().compare_methods(methods, no_plot)
+
+    def compare_methods(self, methods=[typiclust_labeling, uncertainty_labeling, random_sampling], no_plot=False):
+        for method in methods:
+            print(f"Running method: {method.__name__}")
+            self.reset_data()  # Reset data before running each method
+            method(self)  # Call the active learning method
+
+class DCoM(ActiveLearning):
+    def __init__(self, dataObj, unlabelled_size, label_iterations, num_epochs, criterion=torch.nn.CrossEntropyLoss(), debug=False, lr=0.0005, seed=0, val_split=0.1, b=25, alpha=0.7):
+        super().__init__(dataObj, unlabelled_size, label_iterations, num_epochs, criterion, debug, lr, seed, val_split, b)
+        self.alpha = alpha
+        self.delta = 0.1  # Initialize delta with a default value
+        self.graph_df = None
+        self.embedding_space = None  # Will be computed during initialization
+    
+    # ######################################################################
+    #  DCoM
+    # ######################################################################
+
+    def compute_margin(self, model, uSet):
+        """ Compute the normalized margin between the two highest softmax outputs for each sample in unlabelled set """
+        model.eval()
+        margins = []
+        with torch.no_grad():
+            for images, _ in tqdm(torch.utils.data.DataLoader(torch.utils.data.Subset(self.dataObj, uSet), batch_size=64, shuffle=False)):
+                images = images.to(self.device)
+                outputs = model(images).softmax(dim=1)
+                top_vals, _ = outputs.topk(2, dim=1)
+                margin = 1 - (top_vals[:, 0] - top_vals[:, 1])  # Margin = 1 - normalized margin
+                margins.extend(margin.cpu().numpy())
+        
+        # Clear cache to manage memory after processing
+        torch.cuda.empty_cache()
+
+        return np.array(margins)
+
+    def compute_coverage(self, L, delta):
+        """ Compute the coverage probability of the current labeled set """
+        if delta is None:
+            raise ValueError("Delta value cannot be None in compute_coverage.")
+
+        xs, ys, ds = [], [], []
+        combined_indices = torch.tensor(np.append(L, self.uSet))
+        subset_dataset = torch.utils.data.Subset(self.dataObj, combined_indices)
+        cuda_features = torch.stack([img for img, _ in subset_dataset]).cuda().reshape(len(combined_indices), -1)
+        cuda_features = F.normalize(cuda_features, p=2, dim=1)
+
+        for i in range(len(cuda_features) // 500):
+            cur_features = cuda_features[i * 500:(i + 1) * 500]
+            dists = torch.cdist(cur_features.float(), cuda_features.float())
+            mask = dists < delta
+            x, y = mask.nonzero().T
+            ds.append(dists[mask].cpu())
+            xs.append(x.cpu() + i * 500)
+            ys.append(y.cpu())
+        
+        # Clear cache after processing to avoid memory overflow
+        torch.cuda.empty_cache()
+
+        xs = torch.cat(xs).numpy()
+        ys = torch.cat(ys).numpy()
+        ds = torch.cat(ds).numpy()
+
+        return pd.DataFrame({'x': xs, 'y': ys, 'd': ds})
+
+    def update_competence_score(self, coverage, SL):
+        """ Compute the competence score based on the coverage probability """
+        return (1 + np.exp(-30 * (1 - SL))) / (1 + np.exp(-30 * (coverage - 0.9)))
+
+    def select_query(self, uSet, L, delta_avg, SL):
+        """ Select q points using Dynamic Coverage & Margin Mix """
+        margin = self.compute_margin(self.model, uSet)
+        coverage = self.compute_coverage(L, delta_avg)
+
+        query_set = []
+        ranking_scores = []
+        
+        for idx, u in enumerate(uSet):
+            out_degree_rank = np.sum(coverage['x'] == u)  # Out-Degree Rank: Number of neighbors within the coverage
+            ranking_score = SL * (1 - margin[idx]) + (1 - SL) * out_degree_rank
+            ranking_scores.append((u, ranking_score))
+
+        ranking_scores.sort(key=lambda x: x[1], reverse=True)  # Sort by the ranking score
+        query_set = [x[0] for x in ranking_scores[:self.b]]
+        return query_set
+
+    def expand_delta(self, query_set, L, delta_max=1.0):
+        """ Expand the delta for the new labeled points """
+        new_deltas = []
+        coverage = self.compute_coverage(L, delta_max)
+        for v in query_set:
+            delta_opt = self.binary_search_delta(v, L, coverage)
+            new_deltas.append(delta_opt)
+        return new_deltas
+
+    def binary_search_delta(self, v, L, coverage, delta_max=1.0):
+        """ Perform binary search to find optimal delta for the new labeled point """
+        low, high = 0, delta_max
+        while high - low > 0.01:
+            mid = (low + high) / 2
+            if self.compute_coverage(L + [v], mid) > coverage:
+                high = mid
+            else:
+                low = mid
+        return (low + high) / 2
+
+    def transfer_unlabelled_to_labelled(self, indexes):
+        """ Transfer unlabelled samples to labelled dataset """
+        print(f"Before labeling: uSet size: {len(self.uSet)}, lSet size: {len(self.lSet)}")
+      
+        self.lSet.extend(indexes)
+        self.uSet = [item for item in self.uSet if item not in indexes]
+        
+        print(f"After labeling: uSet size: {len(self.uSet)}, lSet size: {len(self.lSet)}")
+
+        # Optionally visualize the decision boundaries for added clarity
+        self.visualize_decision_boundaries()
+
+
+    #########
+    # Create a label iteration function for the DCoM algorithm
+    #########
+
+    @set_name("DCoM")
+    def dcom_labeling(self):
+        """ Label unlabelled samples based on the DCoM algorithm """
+        margin = self.compute_margin(self.model, self.uSet)
+        
+        # Ensure that delta is valid
+        if self.delta is None:
+            self.delta = 0.1  # Default delta value if not updated yet
+
+     
+        coverage = self.compute_coverage(self.lSet, self.delta)
+        
+     
+        SL = self.update_competence_score(coverage, 0.9)  # Example value for SL
+
+        query_set = self.select_query(self.uSet, self.lSet, delta_avg=0.75, SL=SL)
+
+        if len(query_set) == 0:
+            print("No more samples to label! Stopping iteration.")
+            return  # Stop if no more samples to label
+        
+        print(f"Selected query set: {query_set[:5]}...")  # Debug: print first 5 queries
+        
+        self.transfer_unlabelled_to_labelled(query_set)
+        
+
+        if len(query_set) > 0:
+            print(f"After query set selection: Remaining unlabeled: {len(self.uSet)} samples")
+
+        new_deltas = self.expand_delta(query_set, self.lSet)
+        self.visualize_decision_boundaries()
+    
+    @set_name("Uncertainty Sampling")
+    def uncertainty_labeling(self, top_frac=0.1, batch_size=64):
+        """ Label unlabelled samples based on uncertainty sampling """
+        return super().uncertainty_labeling(top_frac, batch_size)
+
+    @set_name("Random Sampling")
+    def random_sampling(self, sample_size=None):
+        """ Randomly sample from the unlabelled dataset for random sampling """
+        return super().random_sampling(sample_size)
+
+    #def compare_methods(self, methods=[uncertainty_labeling, random_sampling, dcom_labeling], no_plot=False):
+
+    def compare_methods(self, methods=[dcom_labeling], no_plot=False):
+        return super().compare_methods(methods, no_plot) # TODO: FIX THIS!!
+        
+        
+        """datapoint_lists, accuracy_lists = [], []
+        for method in methods:
+            datapoint_list, accuracy_list = self.Al_Loop(method, title=method.__name__)
+            datapoint_lists.append(np.array(datapoint_list))
+            accuracy_lists.append(np.array(accuracy_list).max(-1))
+
+        # Plotting the accuracy results for all three methods
+        if not no_plot:
+            plt.figure(figsize=(10, 5))
+            for i, method in enumerate(methods):
+                plt.plot(datapoint_lists[i], accuracy_lists[i], label=method.__name__)
+            plt.xlabel('Datapoints')
+            plt.ylabel('Accuracy')
+            plt.legend()
+            plt.tight_layout()
+            plt.show()
+
+        return datapoint_lists, accuracy_lists"""
