@@ -862,7 +862,6 @@ class DCoM(ActiveLearning):
     @set_name("DCoM")
     def dcom_labeling(self):
         """ Label unlabelled samples based on the DCoM algorithm """
-        margin = self.compute_margin(self.model, self.uSet)
         
         # Ensure that delta is valid
         if self.delta is None:
@@ -888,7 +887,6 @@ class DCoM(ActiveLearning):
         if len(query_set) > 0:
             print(f"After query set selection: Remaining unlabeled: {len(self.uSet)} samples")
 
-        new_deltas = self.expand_delta(query_set, self.lSet)
         self.visualize_decision_boundaries()
     
     @set_name("Uncertainty Sampling")
