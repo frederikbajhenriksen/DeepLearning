@@ -133,7 +133,15 @@ class ActiveLearning:
         """ Reset the data to the initial state for the next active learning method"""
         self.uSet = deepcopy(self.first_uSet)
         self.lSet = deepcopy(self.first_lSet)
-        self.model.load_state_dict(self.model_parameters)
+
+        # Reset model parameters
+        self.model = torchvision.models.resnet18(weights=False)
+        self.model.fc = torch.nn.Linear(self.model.fc.in_features, 10)
+        self.model.conv1 = torch.nn.Conv2d(1, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+        self.model_parameters = deepcopy(self.model.state_dict())
+        self.model = self.model.to(self.device)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.0005) # Reset optimizer
+        
 
     def val_loader(self):
         """ Return validation data loader for model evaluation
