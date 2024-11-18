@@ -8,64 +8,16 @@ from sklearn.manifold import TSNE  # For visualizing decision boundaries
 import pandas as pd
 import torch.nn.functional as F
 
-# TODO: RASMUS SKAL: TEST SUITE + HYPERPARAMETER
-
-# TODO: REMOVE UNCERTAINTY and keep least confidence!
-# TODO: ADD BASELINE METHOD
+# TODO: Nice visualization of results from tests
 # TODO: ADD VISUALIZATION OF THE CHOSEN IMAGES
-# TODO: multi sampling, test suite
-# TODO: reset model?
 # TODO: hyperparameter tuning method
+# TODO: SAVE results to a file
 
 def set_name(name):
     def decorator(func):
         func.__name__ = name
         return func
     return decorator
-
-# TODO: Make faster or import from a library faiss
-def kmeans_torch(x, k, num_iters=100, tol=1e-4):
-    """
-    Torch implementation of k-means clustering
-    
-    Args:
-        x: Input tensor of shape (n_samples, n_features)
-        k: Number of clusters
-        num_iters: Maximum iterations
-        tol: Convergence tolerance
-    """
-    n_samples = x.size(0)
-    
-    # Get target dtype and device
-    target_dtype = x.dtype
-
-    # Randomly initialize centroids
-    rand_indices = torch.randperm(n_samples)[:k]
-    centroids = x[rand_indices]
-    
-    for _ in range(num_iters):
-        # Calculate distances
-        distances = torch.cdist(x, centroids)
-        
-        # Assign points to nearest centroid
-        labels = torch.argmin(distances, dim=1)
-        
-        # Update centroids
-        new_centroids = torch.zeros_like(centroids)
-        for i in range(k):
-            mask = labels == i
-            if mask.sum() > 0:
-                new_centroids[i] = x[mask].mean(dim=0)
-            else:
-                new_centroids[i] = centroids[i]
-        
-        # Check convergence
-        if torch.norm(new_centroids - centroids) < tol:
-            break
-            
-        centroids = new_centroids
-    labels = labels.to(dtype=target_dtype)
-    return labels, centroids
 
 class ActiveLearning:
     def __init__(self, dataObj, unlabelled_size, label_iterations, num_epochs,criterion=torch.nn.CrossEntropyLoss(), debug=False, lr=0.0005, seed=0, val_split=0.1, b=25):
@@ -74,6 +26,7 @@ class ActiveLearning:
         self.label_iterations = label_iterations    # Number of iterations for active learning
         self.debug = debug                          # Debug mode for faster training
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') # Use GPU if available
+        self.seed = seed                            # Seed for reproducibility
         torch.manual_seed(seed)     # Set seed for reproducibility
         self.val_data = None        # Validation data (NOT INDEX)
         self.val_split = val_split  # Validation split in percentage
@@ -95,6 +48,8 @@ class ActiveLearning:
         self.criterion = criterion
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
 
+        self.quiet = False
+
         if self.debug:
             print("Model initializing")
             self.dataObj.data = self.dataObj.data[:1000]
@@ -102,7 +57,10 @@ class ActiveLearning:
             torch.set_num_threads(4)
         
         self.init_data(val_split)
-        
+    
+    #########
+    # General functions for active learning
+    #########
     def init_data(self, val_split=0.1):
         """ Initialize the data for active learning by splitting into training and validation sets 
         Args:
@@ -134,6 +92,7 @@ class ActiveLearning:
         self.uSet = deepcopy(self.first_uSet)
         self.lSet = deepcopy(self.first_lSet)
 
+        torch.manual_seed(self.seed)
         # Reset model parameters
         self.model = torchvision.models.resnet18(weights=False)
         self.model.fc = torch.nn.Linear(self.model.fc.in_features, 10)
@@ -141,7 +100,6 @@ class ActiveLearning:
         self.model_parameters = deepcopy(self.model.state_dict())
         self.model = self.model.to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.0005) # Reset optimizer
-        
 
     def val_loader(self):
         """ Return validation data loader for model evaluation
@@ -184,8 +142,9 @@ class ActiveLearning:
             description: Description for the training run
         """
         accuracies = []
-        print(f"Starting training: {description}")
-        for epoch in tqdm(range(self.num_epochs)):
+        if not self.quiet:
+            print(f"Starting training: {description}")
+        for epoch in tqdm(range(self.num_epochs), disable=self.quiet):
             self.model.train()
             for images, labels in self.train_loader():
                 images, labels = images.to(self.device), labels.to(self.device)
@@ -198,7 +157,8 @@ class ActiveLearning:
             if (epoch + 1) % val_interval == 0:
                 val_accuracy = self.validate_model()
                 accuracies.append(val_accuracy)
-                print(f'Epoch {epoch + 1}, {description} Accuracy: {val_accuracy:.2f}%')
+                if not self.quiet:
+                    print(f'Epoch {epoch + 1}, {description} Accuracy: {val_accuracy:.2f}%')
         return accuracies
     
     def visualize_decision_boundaries(self, sample_size=500):
@@ -258,41 +218,19 @@ class ActiveLearning:
             indexes: List of indices to transfer from unlabelled to labelled dataset
             uncertainties: List of uncertainties for each sample
         """
-        print(f" - Labeled images in training set: {len(self.lSet)}")
+        if not self.quiet:
+            print(f" - Labeled images in training set: {len(self.lSet)}")
+            print(f" - Remaining unlabeled images in unlabeled set: {len(self.uSet)}")
+            print(f"Adding {len(indexes)} images to the training set.")
         self.lSet = np.append(self.lSet, indexes)
-        print(f"Adding {len(indexes)} images to the training set.")
         mask = np.isin(self.uSet, indexes, invert=True)
         self.uSet = np.array(self.uSet)[mask].tolist()
         # Display added images for "eye test"
         #self.display_added_images(selected_images, selected_labels) # Commented out for now, not working..
-    
-    @set_name("Uncertainty Sampling")
-    def uncertainty_labeling(self, top_frac=0.1, batch_size=64):
-        """ Label unlabelled samples based on uncertainty sampling
-        Args:
-            top_frac: Fraction of top uncertain samples to select
-            batch_size: Batch size for processing unlabelled samples
-        """
-        self.model.eval()
-        predictions = []
 
-        # Collect predictions for uncertainty
-        with torch.no_grad():
-            for images, _ in tqdm(self.unlabelled_loader()):
-                images = images.to(self.device)
-                outputs = self.model(images).softmax(dim=1)
-                predictions.extend(outputs.detach().cpu().numpy())
-        predictions = torch.tensor(predictions)
-        top_percent = int(top_frac * len(predictions))
-        # Calculate uncertainties as the top confidence of each prediction
-        uncertainties, top_indices = predictions.max(-1)[0].topk(top_percent, largest=False)
-        # print(f"Adding {len(top_indices)} images to training set for Active Learning.")
-        # Pass both top_indices and uncertainties to transfer_unlabelled_to_labelled
-        sorted_indexes = [idx for _, idx in sorted(zip(uncertainties, top_indices), reverse=True)]
-        selected_indexes = sorted_indexes[:self.b]
-        self.transfer_unlabelled_to_labelled(indexes=selected_indexes)
-        self.visualize_decision_boundaries()
-
+    #########
+    # Baseline Sampling Methods
+    #########
     @set_name("Least Confidence")
     def least_confidence(self,top_frac=0.1):
         self.model.eval()
@@ -300,7 +238,7 @@ class ActiveLearning:
 
         # Collect predictions for uncertainty
         with torch.no_grad():
-            for images, _ in tqdm(self.unlabelled_loader()):
+            for images, _ in tqdm(self.unlabelled_loader(), disable=self.quiet):
                 images = images.to(self.device)
                 outputs = self.model(images).softmax(dim=1)
                 predictions.extend(outputs.detach().cpu().numpy())
@@ -312,7 +250,6 @@ class ActiveLearning:
         top_indices = uncertainties.topk(top_percent, largest=False).indices  # Select least confident samples
         selected_indexes = top_indices[:self.b]
         self.transfer_unlabelled_to_labelled(indexes=selected_indexes)
-        self.visualize_decision_boundaries()
 
     @set_name("Margin Sampling")
     def margin_sampling(self,top_frac=0.1):
@@ -321,7 +258,7 @@ class ActiveLearning:
 
         # Collect predictions for uncertainty
         with torch.no_grad():
-            for images, _ in tqdm(self.unlabelled_loader()):
+            for images, _ in tqdm(self.unlabelled_loader(), disable=self.quiet):
                 images = images.to(self.device)
                 outputs = self.model(images).softmax(dim=1)
                 predictions.extend(outputs.detach().cpu().numpy())
@@ -332,7 +269,6 @@ class ActiveLearning:
         top_indices = margin.topk(top_percent, largest=False).indices  # Select smallest margins
         selected_indexes = top_indices[:self.b]
         self.transfer_unlabelled_to_labelled(indexes=selected_indexes)
-        self.visualize_decision_boundaries()
     
     @set_name("Entropy Sampling")
     def entropy_sampling(self,top_frac=0.1):
@@ -341,7 +277,7 @@ class ActiveLearning:
 
         # Collect predictions for uncertainty
         with torch.no_grad():
-            for images, _ in tqdm(self.unlabelled_loader()):
+            for images, _ in tqdm(self.unlabelled_loader(), disable=self.quiet):
                 images = images.to(self.device)
                 outputs = self.model(images).softmax(dim=1)
                 predictions.extend(outputs.detach().cpu().numpy())
@@ -351,28 +287,7 @@ class ActiveLearning:
         top_indices = entropy.topk(top_percent, largest=True).indices
         selected_indexes = top_indices[:self.b]
         self.transfer_unlabelled_to_labelled(indexes=selected_indexes)
-        self.visualize_decision_boundaries()
 
-    def Al_Loop(self, function, title="Uncertainty Sampling"):
-    # Active Learning Loop
-        datapoint_list = []  # To store the number of labeled datapoints for active learning
-        accuracy_list = []  # To store accuracy after each iteration of active learning
-        for i in range(self.label_iterations):
-            description = f"{title} {i + 1}"
-            self.model.load_state_dict(self.model_parameters)  # Reset model parameters before training
-            # Train model and save accuracies
-            accuracies = self.train_model(val_interval=10, description=description)
-            datapoint_list.append(len(self.lSet))
-            accuracy_list.append(accuracies)
-            if i < self.label_iterations - 1:
-                function(self)
-                print(f"After AL iteration {i + 1}:")
-                print(f" - Labeled images in training set: {len(self.lSet)}")
-                print(f" - Remaining unlabeled images in unlabeled set: {len(self.uSet)}")
-            self.visualize_decision_boundaries()
-        self.reset_data()
-        return datapoint_list, accuracy_list
-    
     @set_name("Random Sampling")
     def random_sampling(self, sample_size=None):
         """ Randomly sample from the unlabelled dataset for random sampling
@@ -384,11 +299,37 @@ class ActiveLearning:
         if sample_size is None:
             sample_size = self.b
         random_indices = torch.randperm(len(self.uSet))[:sample_size]
-        print(f"Adding {len(random_indices)} images to training set for Random Sampling.")
+        if not self.quiet:
+            print(f"Adding {len(random_indices)} images to training set for Random Sampling.")
         self.transfer_unlabelled_to_labelled(random_indices)
         return random_indices
+
+    #########
+    # Final functions
+    #########
+    def Al_Loop(self, function, title="Random Sampling", plot=True):
+    # Active Learning Loop
+        datapoint_list = []  # To store the number of labeled datapoints for active learning
+        accuracy_list = []  # To store accuracy after each iteration of active learning
+        for i in range(self.label_iterations):
+            description = f"{title} {i + 1}"
+            self.model.load_state_dict(self.model_parameters)  # Reset model parameters before training
+            # Train model and save accuracies
+            accuracies = self.train_model(val_interval=30, description=description)
+            datapoint_list.append(len(self.lSet))
+            accuracy_list.append(accuracies)
+            if i < self.label_iterations - 1:
+                function(self)
+                if not self.quiet:
+                    print(f"After AL iteration {i + 1}:")
+                    print(f" - Labeled images in training set: {len(self.lSet)}")
+                    print(f" - Remaining unlabeled images in unlabeled set: {len(self.uSet)}")
+            if plot:
+                self.visualize_decision_boundaries()
+        self.reset_data()
+        return datapoint_list, accuracy_list
     
-    def compare_methods(self, methods=[uncertainty_labeling, random_sampling, least_confidence, margin_sampling, entropy_sampling], no_plot=False):
+    def compare_methods(self, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling], no_plot=False):
         # Run Active Learning Loop
         datapoint_lists, accuracy_lists = [], []
         for method in methods:
@@ -409,13 +350,106 @@ class ActiveLearning:
         plt.tight_layout()
         plt.show()
         return datapoint_lists, accuracy_lists
-        #TODO: ADD BASELINE METHODS
+
+    def test_methods(self, n_tests = 2, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling], plot=True, quiet = False):
+        self.quiet = quiet
+        # run the active learning loop n_tests times for each method
+        datapoint_lists = []
+        accuracy_lists = []
+        seeds = []
+        for i in range(n_tests):
+            seeds.append(self.seed)
+            self.seed = np.random.randint(0, 100000)
+            torch.manual_seed(self.seed)
+            np.random.seed(self.seed)
+            for method in methods:
+                datapoint_list, accuracy_list = self.Al_Loop(method, title=method.__name__, plot=plot)
+                datapoint_lists.append(np.array(datapoint_list))
+                accuracy_lists.append(np.array(accuracy_list).max(-1))
+                print(f"Test {i} {method.__name__} done.")
+            print(f"Test {i / n_tests} done.\n")
+        # get the mean and error of the accuracy for each method
+        mean_accuracy = np.mean(accuracy_lists, axis=1)
+        error_accuracy = np.std(accuracy_lists, axis=1)
+        # 95% confidence interval
+        error_accuracy = 1.96 * error_accuracy / np.sqrt(n_tests)
+        # plot the results
+
+        plt.figure(figsize=(10, 5))
+        for i, method in enumerate(methods):
+            plt.plot(datapoint_lists[i], accuracy_lists[i], label=method.__name__)
+            plt.fill_between(datapoint_lists[i], accuracy_lists[i] - error_accuracy, accuracy_lists[i] + error_accuracy, alpha=0.2)
+        plt.xlabel('Datapoints')
+        plt.ylabel('Accuracy')
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+
+        if plot:
+            plt.figure(figsize=(10, 5))
+            for i, method in enumerate(methods):
+                plt.plot(datapoint_lists[i], accuracy_lists[i], label=method.__name__)
+                plt.fill_between(datapoint_lists[i], accuracy_lists[i] - error_accuracy, accuracy_lists[i] + error_accuracy, alpha=0.2)
+            plt.xlabel('Datapoints')
+            plt.ylabel('Accuracy')
+            plt.legend()
+            plt.tight_layout()
+            plt.show()
+
+        return datapoint_list, mean_accuracy, error_accuracy, seeds
+    
+
+
 
 ##############
 # This is an example of an expansion of the Active Learning class to implement the ProbCover algorithm (Use the same for other expansions, e.g. DCoM)
 # You can also expand on the ActiveLearning class to include more general functions that can be used by all algorithms (such as baseline methods)
 # Or inherit from probcover to include everything
 ##############
+# TODO: Make faster or import from a library faiss
+def kmeans_torch(x, k, num_iters=100, tol=1e-4):
+    """
+    Torch implementation of k-means clustering
+    
+    Args:
+        x: Input tensor of shape (n_samples, n_features)
+        k: Number of clusters
+        num_iters: Maximum iterations
+        tol: Convergence tolerance
+    """
+    n_samples = x.size(0)
+    
+    # Get target dtype and device
+    target_dtype = x.dtype
+
+    # Randomly initialize centroids
+    rand_indices = torch.randperm(n_samples)[:k]
+    centroids = x[rand_indices]
+    
+    for _ in range(num_iters):
+        # Calculate distances
+        distances = torch.cdist(x, centroids)
+        
+        # Assign points to nearest centroid
+        labels = torch.argmin(distances, dim=1)
+        
+        # Update centroids
+        new_centroids = torch.zeros_like(centroids)
+        for i in range(k):
+            mask = labels == i
+            if mask.sum() > 0:
+                new_centroids[i] = x[mask].mean(dim=0)
+            else:
+                new_centroids[i] = centroids[i]
+        
+        # Check convergence
+        if torch.norm(new_centroids - centroids) < tol:
+            break
+            
+        centroids = new_centroids
+    labels = labels.to(dtype=target_dtype)
+    return labels, centroids
+
 class ProbCover(ActiveLearning):
     #########
     # Create a new constructor to add any new parameters needed for the new algorithm and call the parent constructor
@@ -593,7 +627,8 @@ class ProbCover(ActiveLearning):
             coverage = len(covered_samples) / len(combined_indices)
             # Select samples with the highest degree
             degrees = np.bincount(cur_df.x, minlength=len(combined_indices))
-            print(f'Iteration is {i}.\tGraph has {len(cur_df)} edges.\tMax degree is {degrees.max()}.\tCoverage is {coverage:.3f}')
+            if not self.quiet:
+                print(f'Iteration is {i}.\tGraph has {len(cur_df)} edges.\tMax degree is {degrees.max()}.\tCoverage is {coverage:.3f}')
             cur = degrees.argmax() # Here the paper uses random selection and their code uses this.
 
             # Remove incoming edges to newly covered samples
@@ -607,9 +642,9 @@ class ProbCover(ActiveLearning):
         assert len(selected) == self.b, 'added a wrong number of samples'
         
         # Transfer selected samples from unlabelled to labelled
-        print(min(selected))
+        if not self.quiet:
+            print(min(selected))
         self.transfer_unlabelled_to_labelled(selected)
-        self.visualize_decision_boundaries()
 
     ###########
     # Include the new method in the compare_methods function and add the old methods to the list
@@ -623,13 +658,10 @@ class ProbCover(ActiveLearning):
     @set_name("Entropy Sampling")
     def entropy_sampling(self,top_frac=0.1):
         return super().entropy_sampling(top_frac)
-    @set_name("Uncertainty Sampling")
-    def uncertainty_labeling(self, top_frac=0.1, batch_size=64):
-        return super().uncertainty_labeling(top_frac, batch_size)
     @set_name("Random Sampling")
     def random_sampling(self, sample_size=None):
         return super().random_sampling(sample_size)
-    def compare_methods(self, methods=[uncertainty_labeling, random_sampling, prob_cover_labeling, least_confidence, margin_sampling, entropy_sampling], no_plot=False):
+    def compare_methods(self, methods=[random_sampling, prob_cover_labeling, least_confidence, margin_sampling, entropy_sampling], no_plot=False):
         return super().compare_methods(methods, no_plot)
 
 
@@ -679,8 +711,9 @@ class TypiClust(ActiveLearning):
 
         # features = self.extract_features(self.dataObj.data[self.uSet])
         features = self.dataObj.data[torch.tensor(self.uSet)].reshape(len(self.uSet), -1).float()
-        features = F.normalize(features, p=2, dim=1).to(self.device) # Normalize features 
-        print("features extracted")
+        features = F.normalize(features, p=2, dim=1).to(self.device) # Normalize features
+        if not self.quiet:
+            print("features extracted")
         labels = kmeans.fit_predict(features)
         return kmeans.cluster_centers_, labels
 
@@ -719,35 +752,29 @@ class TypiClust(ActiveLearning):
     @set_name("TypiClust")
     def typiclust_labeling(self):
         """ Label unlabelled samples based on the TypiClust algorithm """
-
-        print("Starting TypiClust labeling...")
-        
         # Ensure we have typical samples selected using TypiClust
         selected = self.typical_samples
-        print(f"Number of typical samples: {len(self.typical_samples)}")
+        if not self.quiet:
+            print(f"Number of typical samples: {len(self.typical_samples)}")
 
         # Iterate through and select samples to be labeled
         if len(selected) > self.b:
             selected = selected[:self.b]  # Select only the required number of samples
-        print(f"Selected {len(selected)} samples using TypiClust for labeling.")
+        if not self.quiet:
+            print(f"Selected {len(selected)} samples using TypiClust for labeling.")
 
         # Transfer selected samples from unlabelled to labelled
         self.transfer_unlabelled_to_labelled(selected)
-        self.visualize_decision_boundaries()
 
     ###########
     # Include the new method in the compare_methods function and add the old methods to the list
     ###########
 
-    @set_name("Uncertainty Sampling")
-    def uncertainty_labeling(self, top_frac=0.1, batch_size=64):
-        return super().uncertainty_labeling(top_frac, batch_size)
-
     @set_name("Random Sampling")
     def random_sampling(self, sample_size=None):
         return super().random_sampling(sample_size)
 
-    def compare_methods(self, methods=[typiclust_labeling, uncertainty_labeling, random_sampling], no_plot=False):
+    def compare_methods(self, methods=[typiclust_labeling, random_sampling], no_plot=False):
         return super().compare_methods(methods, no_plot, title="TypiClust")
 
 
@@ -875,10 +902,8 @@ class DCoM(ActiveLearning):
         if self.delta is None:
             self.delta = 0.1  # Default delta value if not updated yet
 
-     
         coverage = self.compute_coverage(self.lSet, self.delta)
         
-     
         SL = self.update_competence_score(coverage, 0.9)  # Example value for SL
 
         query_set = self.select_query(self.uSet, self.lSet, delta_avg=0.75, SL=SL)
@@ -890,17 +915,11 @@ class DCoM(ActiveLearning):
         print(f"Selected query set: {query_set[:5]}...")  # Debug: print first 5 queries
         
         self.transfer_unlabelled_to_labelled(query_set)
-        
 
         if len(query_set) > 0:
             print(f"After query set selection: Remaining unlabeled: {len(self.uSet)} samples")
 
         self.visualize_decision_boundaries()
-    
-    @set_name("Uncertainty Sampling")
-    def uncertainty_labeling(self, top_frac=0.1, batch_size=64):
-        """ Label unlabelled samples based on uncertainty sampling """
-        return super().uncertainty_labeling(top_frac, batch_size)
 
     @set_name("Random Sampling")
     def random_sampling(self, sample_size=None):
