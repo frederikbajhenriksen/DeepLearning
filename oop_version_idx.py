@@ -6,8 +6,16 @@ from tqdm import tqdm  # For displaying progress bars during training
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE  # For visualizing decision boundaries
 import pandas as pd
-#from sklearn.cluster import KMeans
 import torch.nn.functional as F
+
+# TODO: RASMUS SKAL: TEST SUITE + HYPERPARAMETER
+
+# TODO: REMOVE UNCERTAINTY and keep least confidence!
+# TODO: ADD BASELINE METHOD
+# TODO: ADD VISUALIZATION OF THE CHOSEN IMAGES
+# TODO: multi sampling, test suite
+# TODO: reset model?
+# TODO: hyperparameter tuning method
 
 def set_name(name):
     def decorator(func):
@@ -618,12 +626,12 @@ class ProbCover(ActiveLearning):
 
 
 
-# ######################################################################
-# # TYPICLUST
-# ######################################################################
+######################################################################
+# TYPICLUST
+######################################################################
+
 from sklearn.cluster import MiniBatchKMeans, KMeans
 from sklearn.neighbors import NearestNeighbors
-
 
 def get_nn(features, num_neighbors):
     """Calculate nearest neighbors using scikit-learn on CPU."""
@@ -639,14 +647,6 @@ def calculate_typicality(features, num_neighbors):
     return typicality
 
 class TypiClust(ActiveLearning):
-    # RASMUS QUESTIONS: 
-    # 1. hvorfor vælger vi typical samples før vi træner modellen?
-    # 2. hvorfor bruger vi resnet18 til at udregne features?
-    # 3. Can vi ikke bare bruge den rå data?
-    # tror problemmet ligger i extract_features, 
-    # hvis jeg må vil jeg gerne prøve at lave en ny metode der tager 
-    # rå data og udregner features på den måde jeg gør det i ProbCover
-
 
     MAX_NUM_CLUSTERS = 500  # Example value, adjust as needed
     MIN_CLUSTER_SIZE = 5    # Example value, adjust as needed
@@ -669,38 +669,22 @@ class TypiClust(ActiveLearning):
         else:
             kmeans = MiniBatchKMeans(n_clusters=num_clusters, batch_size=5000, random_state=0)
 
-        features = self.extract_features(self.dataObj.data[self.uSet])
+        # features = self.extract_features(self.dataObj.data[self.uSet])
+        features = self.dataObj.data[torch.tensor(self.uSet)].reshape(len(self.uSet), -1).float()
+        features = F.normalize(features, p=2, dim=1).to(self.device) # Normalize features 
         print("features extracted")
         labels = kmeans.fit_predict(features)
         return kmeans.cluster_centers_, labels
 
-    def extract_features(self, data): # TODO: DEN HER!
-        """ Extract features from the data using a pre-trained model (why not use the model from the parent class?) """
-        model = torchvision.models.resnet18(pretrained=True)  # Use pre-trained weights
-        model.eval()
-
-        features = []
-        with torch.no_grad():
-            for img in data:
-                img = img.unsqueeze(0).repeat(1, 3, 1, 1)  # Convert grayscale to RGB (why??)
-                img = F.interpolate(img, size=(224, 224))  # Resize to 224x224
-                img = img / 255.0  # Normalize to [0, 1]
-                feature = model(img)
-                features.append(feature.squeeze().cpu().numpy())
-
-        return np.array(features)
-
     def select_typical_samples(self):
         """ Select typical samples from each cluster based on density """
-        # relevant_indices = np.concatenate([self.lSet, self.uSet]).astype(int)
-        # features = self.extract_features(self.dataObj.data[relevant_indices])
-        # labels = np.copy(self.labels[relevant_indices])
 
-        features = self.extract_features(self.dataObj.data[self.uSet])
-        labels = np.copy(self.labels)
+        # Extract features
+        features = self.dataObj.data[torch.tensor(self.uSet)].reshape(len(self.uSet), -1).float()
+        features = F.normalize(features, p=2, dim=1).to(self.device) # Normalize features 
         
         # Handle minimum cluster size and sorting
-        cluster_ids, cluster_sizes = np.unique(labels, return_counts=True)
+        cluster_ids, cluster_sizes = np.unique(self.labels, return_counts=True)
         clusters_df = pd.DataFrame({
             'cluster_id': cluster_ids,
             'cluster_size': cluster_sizes,
@@ -712,13 +696,15 @@ class TypiClust(ActiveLearning):
         typical_samples = []
         for i in range(self.b):
             cluster = clusters_df.iloc[i % len(clusters_df)].cluster_id
-            indices = np.where(labels == cluster)[0]
+            indices = np.where(self.labels == cluster)[0]
             rel_feats = features[indices]
             typicality = calculate_typicality(rel_feats, min(self.K_NN, len(indices) // 2))
             idx = indices[typicality.argmax()]
             typical_samples.append(idx)
 
         return typical_samples
+    
+
     #########
     # Create a label iteration function for TypiClust
     #########
@@ -744,6 +730,7 @@ class TypiClust(ActiveLearning):
     ###########
     # Include the new method in the compare_methods function and add the old methods to the list
     ###########
+
     @set_name("Uncertainty Sampling")
     def uncertainty_labeling(self, top_frac=0.1, batch_size=64):
         return super().uncertainty_labeling(top_frac, batch_size)
@@ -752,14 +739,13 @@ class TypiClust(ActiveLearning):
     def random_sampling(self, sample_size=None):
         return super().random_sampling(sample_size)
 
-    # def compare_methods(self, methods=[uncertainty_labeling, random_sampling ,typiclust_labeling], no_plot=False):
-    #     return super().compare_methods(methods, no_plot)
-
     def compare_methods(self, methods=[typiclust_labeling, uncertainty_labeling, random_sampling], no_plot=False):
-        for method in methods:
-            print(f"Running method: {method.__name__}")
-            self.reset_data()  # Reset data before running each method
-            method(self)  # Call the active learning method
+        return super().compare_methods(methods, no_plot, title="TypiClust")
+
+
+# ######################################################################
+#  DCoM
+# ######################################################################
 
 class DCoM(ActiveLearning):
     def __init__(self, dataObj, unlabelled_size, label_iterations, num_epochs, criterion=torch.nn.CrossEntropyLoss(), debug=False, lr=0.0005, seed=0, val_split=0.1, b=25, alpha=0.7):
@@ -768,10 +754,6 @@ class DCoM(ActiveLearning):
         self.delta = 0.1  # Initialize delta with a default value
         self.graph_df = None
         self.embedding_space = None  # Will be computed during initialization
-    
-    # ######################################################################
-    #  DCoM
-    # ######################################################################
 
     def compute_margin(self, model, uSet):
         """ Compute the normalized margin between the two highest softmax outputs for each sample in unlabelled set """
