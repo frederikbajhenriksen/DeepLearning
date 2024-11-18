@@ -435,7 +435,7 @@ class ProbCover(ActiveLearning):
         combined_indices = torch.tensor(np.append(self.lSet, self.uSet))
         subset_dataset = torch.utils.data.Subset(self.dataObj, combined_indices)
 
-        cuda_features = torch.stack([img for img, _ in subset_dataset]).cuda()
+        cuda_features = torch.stack([img for img, _ in subset_dataset]).to_device(self.device)
         # Reshape images to 2D format (N, 784) for distance computation
         cuda_features = cuda_features.reshape(cuda_features.shape[0], -1)
         # Normalize features
@@ -656,7 +656,6 @@ class TypiClust(ActiveLearning):
         # Call the parent constructor
         super().__init__(dataObj, unlabelled_size, label_iterations, num_epochs, criterion, debug, lr, seed, val_split, b)
         self.k = k  # Number of clusters for TypiClust
-        self.seed = seed  # Set the seed attribute
 
         # Perform clustering and select initial samples
         self.centroids, self.labels = self.perform_clustering()
@@ -683,7 +682,7 @@ class TypiClust(ActiveLearning):
         features = []
         with torch.no_grad():
             for img in data:
-                img = img.unsqueeze(0).repeat(1, 3, 1, 1)  # Convert grayscale to RGB
+                img = img.unsqueeze(0).repeat(1, 3, 1, 1)  # Convert grayscale to RGB (why??)
                 img = F.interpolate(img, size=(224, 224))  # Resize to 224x224
                 img = img / 255.0  # Normalize to [0, 1]
                 feature = model(img)
@@ -753,11 +752,5 @@ class TypiClust(ActiveLearning):
     def random_sampling(self, sample_size=None):
         return super().random_sampling(sample_size)
 
-    # def compare_methods(self, methods=[uncertainty_labeling, random_sampling ,typiclust_labeling], no_plot=False):
-    #     return super().compare_methods(methods, no_plot)
-
-    def compare_methods(self, methods=[typiclust_labeling, uncertainty_labeling, random_sampling], no_plot=False):
-        for method in methods:
-            print(f"Running method: {method.__name__}")
-            self.reset_data()  # Reset data before running each method
-            method(self)  # Call the active learning method
+    def compare_methods(self, methods=[uncertainty_labeling, random_sampling ,typiclust_labeling], no_plot=False):
+        return super().compare_methods(methods, no_plot)
