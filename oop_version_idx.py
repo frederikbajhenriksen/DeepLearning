@@ -353,50 +353,68 @@ class ActiveLearning:
 
     def test_methods(self, n_tests = 2, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling], plot=True, quiet = False):
         self.quiet = quiet
-        # run the active learning loop n_tests times for each method
-        datapoint_lists = []
-        accuracy_lists = []
-        seeds = []
+        # Initialize result dictionaries for each method
+        method_results = {method.__name__: {
+            'datapoints': [],
+            'accuracies': []
+        } for method in methods}
+        
         for i in range(n_tests):
-            seeds.append(self.seed)
+            # Set seeds
             self.seed = np.random.randint(0, 100000)
             torch.manual_seed(self.seed)
             np.random.seed(self.seed)
+            
             for method in methods:
+                # Run AL Loop
                 datapoint_list, accuracy_list = self.Al_Loop(method, title=method.__name__, plot=plot)
-                datapoint_lists.append(np.array(datapoint_list))
-                accuracy_lists.append(np.array(accuracy_list).max(-1))
-                print(f"Test {i} {method.__name__} done.")
-            print(f"Test {i / n_tests} done.\n")
-        # get the mean and error of the accuracy for each method
-        mean_accuracy = np.mean(accuracy_lists, axis=1)
-        error_accuracy = np.std(accuracy_lists, axis=1)
-        # 95% confidence interval
-        error_accuracy = 1.96 * error_accuracy / np.sqrt(n_tests)
-        # plot the results
+                
+                # Store results by method
+                method_results[method.__name__]['datapoints'].append(np.array(datapoint_list))
+                method_results[method.__name__]['accuracies'].append(np.array(accuracy_list))
+                
+                if not self.quiet:
+                    print(f"Test {i} {method.__name__} done.")
+            print(f"Tests {100 * (i+1) / n_tests}% done.\n")
 
+        # Calculate statistics for each method
+        aggregated_results = {}
+        for method_name, results in method_results.items():
+            # Convert lists to arrays for calculations
+            datapoints = np.array(results['datapoints'])
+            accuracies = np.array(results['accuracies'])
+            
+            # Calculate mean and error
+            mean_accuracy = accuracies.mean(axis=0)
+            error_accuracy = accuracies.std(axis=0)
+            error_accuracy = 1.96 * error_accuracy / np.sqrt(n_tests)  # 95% CI
+            
+            aggregated_results[method_name] = {
+                'datapoints': datapoints,
+                'mean_accuracy': mean_accuracy,
+                'error_accuracy': error_accuracy
+            }
+
+        # TODO: REMOVE THIS
         plt.figure(figsize=(10, 5))
-        for i, method in enumerate(methods):
-            plt.plot(datapoint_lists[i], accuracy_lists[i], label=method.__name__)
-            plt.fill_between(datapoint_lists[i], accuracy_lists[i] - error_accuracy, accuracy_lists[i] + error_accuracy, alpha=0.2)
+        for method_name, results in aggregated_results.items():
+            # Get correct shapes for plotting
+            x = results['datapoints'].mean(axis=0)
+            y = results['mean_accuracy'].reshape(-1)  # Flatten to 1D
+            yerr = results['error_accuracy'].reshape(-1)  # Flatten to 1D
+            
+            plt.errorbar(x, y, 
+                        yerr=yerr,
+                        label=method_name,
+                        capsize=3)
+        
         plt.xlabel('Datapoints')
         plt.ylabel('Accuracy')
         plt.legend()
         plt.tight_layout()
         plt.show()
 
-        if plot:
-            plt.figure(figsize=(10, 5))
-            for i, method in enumerate(methods):
-                plt.plot(datapoint_lists[i], accuracy_lists[i], label=method.__name__)
-                plt.fill_between(datapoint_lists[i], accuracy_lists[i] - error_accuracy, accuracy_lists[i] + error_accuracy, alpha=0.2)
-            plt.xlabel('Datapoints')
-            plt.ylabel('Accuracy')
-            plt.legend()
-            plt.tight_layout()
-            plt.show()
-
-        return datapoint_list, mean_accuracy, error_accuracy, seeds
+        return aggregated_results
     
 
 
