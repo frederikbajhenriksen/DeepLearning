@@ -365,7 +365,7 @@ class ActiveLearning:
             torch.manual_seed(self.seed)
             np.random.seed(self.seed)
             
-            for method in methods:
+            for method in tqdm(methods,desc=f"Test {i}"):
                 # Run AL Loop
                 datapoint_list, accuracy_list = self.Al_Loop(method, title=method.__name__, plot=plot)
                 
@@ -375,7 +375,6 @@ class ActiveLearning:
                 
                 if not self.quiet:
                     print(f"Test {i} {method.__name__} done.")
-            print(f"Tests {100 * (i+1) / n_tests}% done.\n")
 
         # Calculate statistics for each method
         aggregated_results = {}
@@ -395,7 +394,6 @@ class ActiveLearning:
                 'error_accuracy': error_accuracy
             }
 
-        # TODO: REMOVE THIS
         plt.figure(figsize=(10, 5))
         for method_name, results in aggregated_results.items():
             # Get correct shapes for plotting
@@ -410,6 +408,29 @@ class ActiveLearning:
         
         plt.xlabel('Datapoints')
         plt.ylabel('Accuracy')
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+
+        random_sampling = aggregated_results['random_sampling']['mean_accuracy']
+        random_sampling_err = aggregated_results['random_sampling']['error_accuracy']
+
+        plt.figure(figsize=(10, 5))
+        for method_name, results in aggregated_results.items():
+            # TAke the difference from random sampling
+            x = results['datapoints'].mean(axis=0)
+            y = results['mean_accuracy'].reshape(-1)
+            yerr = results['error_accuracy'].reshape(-1)
+
+            y = y - random_sampling
+            yerr = np.sqrt(yerr**2 + random_sampling_err**2)
+            plt.errorbar(x, y, 
+                        yerr=yerr,
+                        label=method_name,
+                        capsize=3)
+
+        plt.xlabel('Datapoints')
+        plt.ylabel('Accuracy Difference from Random Sampling')
         plt.legend()
         plt.tight_layout()
         plt.show()
