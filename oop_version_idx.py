@@ -804,11 +804,8 @@ class TypiClust(ActiveLearning):
 class DCoM(ProbCover):
     def __init__(self, dataObj, unlabelled_size, label_iterations, num_epochs, criterion=torch.nn.CrossEntropyLoss(), 
                  debug=False, lr=0.0005, seed=0, val_split=0.1, b=25, delta=None, alpha=0.7, competence_threshold=0.5):
-        """
-        Constructor for DCoM class, inheriting from ProbCover.
-        Args:
-            competence_threshold: Score to determine the transition from low to high competence.
-        """
+        """Constructor for DCoM class, inheriting from ProbCover."""
+
         super().__init__(dataObj, unlabelled_size, label_iterations, num_epochs, criterion, debug, lr, seed, val_split, b, delta, alpha)
         self.competence_threshold = competence_threshold
 
