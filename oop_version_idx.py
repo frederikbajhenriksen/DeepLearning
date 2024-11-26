@@ -365,7 +365,7 @@ class ActiveLearning:
             torch.manual_seed(self.seed)
             np.random.seed(self.seed)
             
-            for method in methods:
+            for method in tqdm(methods,desc=f"Test {i}"):
                 # Run AL Loop
                 datapoint_list, accuracy_list = self.Al_Loop(method, title=method.__name__, plot=plot)
                 
@@ -375,7 +375,6 @@ class ActiveLearning:
                 
                 if not self.quiet:
                     print(f"Test {i} {method.__name__} done.")
-            print(f"Tests {100 * (i+1) / n_tests}% done.\n")
 
         # Calculate statistics for each method
         aggregated_results = {}
