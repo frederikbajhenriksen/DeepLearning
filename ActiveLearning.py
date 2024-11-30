@@ -815,7 +815,7 @@ class ActiveLearning:
         # Ensure we have typical samples selected using TypiClust
         selected = self.select_typical_samples()
         if not self.quiet:
-            print(f"Number of typical samples: {len(self.typical_samples)}")
+            print(f"Number of typical samples: {len(selected)}")
 
         # Iterate through and select samples to be labeled
         if len(selected) > self.b:
@@ -875,7 +875,11 @@ class ActiveLearning:
         plt.close()
         return datapoint_lists, accuracy_lists
 
-    def test_methods(self, n_tests = 2, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling, prob_cover_labeling, typiclust_labeling], plot=True, quiet = False):
+    def test_methods(self, n_tests = 2, 
+                     methods=[random_sampling, least_confidence, 
+                              margin_sampling, entropy_sampling, 
+                              prob_cover_labeling, typiclust_labeling], 
+                     plot=True, quiet = False):
         self.quiet = quiet
         # Initialize result dictionaries for each method
         method_results = {method.__name__: {
