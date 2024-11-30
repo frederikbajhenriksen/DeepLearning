@@ -10,6 +10,10 @@ import torch.nn.functional as F
 from sklearn.neighbors import NearestNeighbors
 from PIL import Image
 
+# TODO: RuntimeWarning: Found Intel OpenMP ('libiomp') and LLVM OpenMP ('libomp') loaded at
+# THis is an issue that will hit us on the HPC, but not on the local machine
+# I think it is because of sklearn, but I am not sure.
+
 def set_name(name):
     def decorator(func):
         func.__name__ = name
