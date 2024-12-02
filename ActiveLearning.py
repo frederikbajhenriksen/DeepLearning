@@ -1029,4 +1029,7 @@ class ActiveLearning:
         plt.savefig(f'test_methods_difference_{self.data_name}.png', dpi=300)
         plt.close()
 
+        # Save to csv
+        pd.DataFrame(aggregated_results).to_csv(f'test_methods_results_{self.data_name}.csv')
+        
         return aggregated_results
