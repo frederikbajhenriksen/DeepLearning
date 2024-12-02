@@ -128,6 +128,9 @@ class ActiveLearning:
 
         self.num_epochs = num_epochs # Number of epochs for training
 
+        # Dataname
+        self.data_name = self.dataObj.__class__.__name__
+
         # We need to check 
         sample_data, _ = self.dataObj[0]
         if isinstance(sample_data, np.ndarray):
@@ -397,7 +400,7 @@ class ActiveLearning:
             ax.axis('off')
         plt.tight_layout()
         # plt.show()
-        plt.savefig('added_images_grid.png', dpi=300)
+        plt.savefig(f'added_images_grid_{self.data_name}.png' , dpi=300) 
         plt.close()
     
     def transfer_unlabelled_to_labelled(self, indexes, method_name):
@@ -462,7 +465,7 @@ class ActiveLearning:
             ax.axis('off')
 
         plt.tight_layout()
-        filename = f"added_images_{method_name}_iteration_{iteration}.png"
+        filename = f"added_images_{method_name}_iteration_{iteration}_{self.data_name}.png"
         plt.savefig(filename, dpi=300)
         plt.close()
 
@@ -834,7 +837,7 @@ class ActiveLearning:
     # Final functions
     #########
     def Al_Loop(self, function, title="Random Sampling", plot=True):
-    # Active Learning Loop
+        # Active Learning Loop
         datapoint_list = []  # To store the number of labeled datapoints for active learning
         accuracy_list = []  # To store accuracy after each iteration of active learning
         for i in range(self.label_iterations):
@@ -875,7 +878,7 @@ class ActiveLearning:
         plt.legend()
         plt.tight_layout()
         # plt.show()
-        plt.savefig('method_comparison.png', dpi=300)
+        plt.savefig(f'method_comparison_{self.data_name}.png', dpi=300)
         plt.close()
         return datapoint_lists, accuracy_lists
 
@@ -887,6 +890,7 @@ class ActiveLearning:
         self.quiet = quiet
         # Initialize result dictionaries for each method
         method_results = {method.__name__: {
+            'seed': [],
             'datapoints': [],
             'accuracies': []
         } for method in methods}
@@ -896,6 +900,7 @@ class ActiveLearning:
             self.seed = np.random.randint(0, 100000)
             torch.manual_seed(self.seed)
             np.random.seed(self.seed)
+            method_results['seed'].append(self.seed)
 
             print(f"Starting Test {i}")  # Debug: Starting the test
             
@@ -987,7 +992,7 @@ class ActiveLearning:
         plt.legend()
         plt.tight_layout()
         # plt.show()
-        plt.savefig('test_methods_accuracy.png', dpi=300)
+        plt.savefig(f'test_methods_accuracy_{self.data_name}.png', dpi=300)
         plt.close()
 
 
@@ -1021,7 +1026,7 @@ class ActiveLearning:
         plt.legend()
         plt.tight_layout()
         #plt.show()
-        plt.savefig('test_methods_difference.png', dpi=300)
+        plt.savefig(f'test_methods_difference_{self.data_name}.png', dpi=300)
         plt.close()
 
         return aggregated_results
