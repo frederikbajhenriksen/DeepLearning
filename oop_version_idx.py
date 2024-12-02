@@ -824,21 +824,41 @@ class TypiClust(ActiveLearning):
 
 class DCoM(ProbCover):
     def __init__(self, dataObj, unlabelled_size, label_iterations, num_epochs, criterion=torch.nn.CrossEntropyLoss(), 
-                 debug=False, lr=0.0005, seed=0, val_split=0.1, b=25, delta=None, alpha=0.7, competence_threshold=0.5):
-        """Constructor for DCoM class, inheriting from ProbCover."""
-
+                 debug=False, lr=0.0005, seed=0, val_split=0.1, b=25, delta=None, alpha=0.7, lSet_deltas=None):
         super().__init__(dataObj, unlabelled_size, label_iterations, num_epochs, criterion, debug, lr, seed, val_split, b, delta, alpha)
-        self.competence_threshold = competence_threshold
 
-    def calculate_competence(self):
-        """Calculates the competence score of the learner based on coverage."""
 
-        coverage_probability = len(self.graph_df.y.unique()) / len(self.dataObj)
-        return coverage_probability
+    def construct_graph(self, delta=None, batch_size=500):
+        """Constructs the graph and prunes covered points."""
+        if delta is None:
+            delta = self.delta
+        
+        # Prepare combined features
+        combined_indices = torch.tensor(np.append(self.lSet, self.uSet))
+        features = torch.stack([img for img, _ in torch.utils.data.Subset(self.dataObj, combined_indices)])
+        features = features.reshape(features.size(0), -1).float().to(self.device)
+        features = F.normalize(features, p=2, dim=1)
 
-    def dcom_scoring(self):
-        """Implements the DCoM dynamic scoring combining coverage and margin-based uncertainty."""
+        xs, ys, ds = [], [], []
+        for i in range((len(features) + batch_size - 1) // batch_size):
+            cur_batch = features[i * batch_size: (i + 1) * batch_size]
+            dists = torch.cdist(cur_batch, features)
+            mask = dists < delta
+            x, y = mask.nonzero(as_tuple=True)
+            xs.append(x + i * batch_size)
+            ys.append(y)
+            ds.append(dists[mask])
+        
+        xs, ys, ds = torch.cat(xs).cpu().numpy(), torch.cat(ys).cpu().numpy(), torch.cat(ds).cpu().numpy()
+        df = pd.DataFrame({'x': xs, 'y': ys, 'd': ds})
 
+        # Prune graph TODO: must include logic on the lSet_deltas
+        covered_indices = np.isin(df.x, range(len(self.lSet))) & (df.d < self.delta)
+        covered_samples = df.y[covered_indices].unique()
+        mask = np.isin(df.y, covered_samples) | np.isin(df.x, range(len(self.lSet)))
+        return df[~mask], covered_samples
+
+    def calculate_margin(self):
         self.model.eval()
         with torch.no_grad():
             predictions = []
@@ -846,42 +866,53 @@ class DCoM(ProbCover):
                 images = images.to(self.device)
                 outputs = self.model(images).softmax(dim=1)
                 predictions.extend(outputs.cpu().numpy())
-            predictions = torch.tensor(predictions)
         
-        # Margin scores
+        predictions = torch.tensor(predictions)
         margins = predictions.topk(2, dim=1).values
-        margin_uncertainty = margins[:, 0] - margins[:, 1]
-        
-        # Competence score combining coverage and margin uncertainty
-        competence_score = self.calculate_competence()
-        adjusted_scores = (1 - competence_score) * self.out_degree_rank() + competence_score * margin_uncertainty
-        return adjusted_scores
+        margin_uncertainty = margins[:, 0] - margins[:, 1] # TODO: Normalize as described in paper
+        return margin_uncertainty
+
+
+    def calculate_competence(self):
+        """Calculates the competence score of the learner."""
+        coverage = len(self.graph_df.y.unique()) / len(self.dataObj)
+        k = 10  # Adjust to fit value in paper
+        a = 0.5  # Adjust to fit value in paper
+        competence = 1 / (1 + np.exp(-k * (coverage - a)))
+        return competence
 
     def out_degree_rank(self):
-        """Calculates the out-degree rank for all unlabeled samples based on the current graph."""
-        
-        degrees = torch.bincount(torch.tensor(self.graph_df.x), minlength=len(self.dataObj))
+        """Calculates the out-degree rank of the graph nodes."""
+        x = torch.tensor(self.graph_df['x'].values)  # Ensure it's a 1D tensor
+        degrees = torch.bincount(x, minlength=len(self.dataObj))
         return degrees[self.uSet]
-
-    #########
-    # Create a label iteration function for DCoM
-    #########
 
     @set_name("DCoM")
     def dcom_sampling(self):
-        """Selects samples based on DCoM scoring and transfers them to the labeled set."""
+        """Performs active sampling based on DCoM scoring."""
+        
+        competence_score = self.calculate_competence() 
+        margin_scores = self.calculate_margin()
+        delta_avg = self.lSet_deltas.mean() # include lSet_deltas in the constructor and maybe delta_avg
 
-        scores = self.dcom_scoring()
-        top_indices = torch.argsort(scores, descending=True)[:self.b]
-        selected = torch.tensor(self.uSet)[top_indices].tolist()
+        #self.graph_df = construct_graph(delta=delta_avg)
+
+        self.graph_df, covered_samples = self.construct_graph() # TODO: use the lSet_deltas to construct graph. expanded after each iteration
+
+        selected = []
+
+        for _ in range(self.b): # As in paper Algorithm 1. Based on the unlabelled set choose the top sample with maximum ranking score one by one.
+            out_degree_ranks = self.out_degree_rank()
+            ranking_scores = (1 - competence_score) * out_degree_ranks + competence_score * margin_scores
+            selected_idx = ranking_scores.argmax()
+            selected.append(selected_idx)
+            self.graph_df = self.graph_df[(self.graph_df.x != selected_idx) & (~np.isin(self.graph_df.y, covered_samples))] # Prune graph after each selection.
+            #margin_scores[selected_idx] = 1 # Set to 1 to avoid re-selection
+
         self.transfer_unlabelled_to_labelled(selected)
-
-    ###########
-    # Include the new method in the compare_methods function and add the old methods to the list
-    ###########
+        self.delta_expansion() # Expand lSet_delta after each iteration. selected samples for labelling. Binary search.
 
     #def compare_methods(self, methods=[random_sampling, prob_cover_labeling, dcom_sampling, least_confidence, margin_sampling, entropy_sampling], no_plot=False):
     def compare_methods(self, methods=[dcom_sampling], no_plot=False):
-        """Adds DCoM to the list of methods for comparison."""
-
+        """Includes DCoM in the comparison list."""
         return super().compare_methods(methods, no_plot)
