@@ -644,7 +644,9 @@ class ActiveLearning:
     #########
     def extract_features(self,):
         """ Embed the data using a pre-trained model and return the penultimate layer features 
-        Should Ideally be a new model, with a projection head and a defferent loss function but this will have to do for now."""
+        Should Ideally be a new model, with a projection head and a defferent loss function but this will have to do for now.
+        Contrastive loss might be good.
+        Even more ideal would be using a unsupervised model like SCAN or DINO, but that requires an additional amount of work."""
         model = torchvision.models.resnet18(weights='ResNet18_Weights.DEFAULT')
         # Adjust the first convolutional layer to accept one-channel input
         if self.input_channels != 3:
@@ -903,11 +905,13 @@ class ActiveLearning:
                      plot=True, quiet = False):
         self.quiet = quiet
         # Initialize result dictionaries for each method
-        method_results = {method.__name__: {
-            'seed': [],
-            'datapoints': [],
-            'accuracies': []
-        } for method in methods}
+        method_results = {
+            'seed': [],  # Add a top-level seed key
+            **{method.__name__: {
+                'datapoints': [],
+                'accuracies': []
+            } for method in methods}
+        }
         
         for i in range(n_tests):
             # Set seeds
@@ -979,6 +983,7 @@ class ActiveLearning:
 
                 # Store results using the standardized key
                 aggregated_results[standardized_key] = {
+                    'seed': results['seed'],
                     'datapoints': datapoints,
                     'mean_accuracy': mean_accuracy,
                     'error_accuracy': error_accuracy
@@ -1084,6 +1089,7 @@ class DCoM(ActiveLearning):
         df_filtered = df[~mask]
         return df_filtered, covered_samples
 
+    @set_name("DCoM")
     def dcom_labeling(self):
         def get_competence_score(coverage):
             a = 0.9 # From paper
@@ -1236,4 +1242,30 @@ class DCoM(ActiveLearning):
     
     def compare_methods(self, methods=[dcom_labeling], no_plot=False):
         return super().compare_methods(methods, no_plot)
+    
+    @set_name("Random Sampling")
+    def random_sampling(self, sample_size=None):
+        return super().random_sampling(sample_size)
+    
+    @set_name("Least Confidence")
+    def least_confidence(self,top_frac=0.15):
+        return super().least_confidence(top_frac)
+    
+    @set_name("Margin Sampling")
+    def margin_sampling(self,top_frac=0.15):
+        return super().margin_sampling(top_frac)
+    
+    @set_name("Entropy Sampling")
+    def entropy_sampling(self,top_frac=0.15):
+        return super().entropy_sampling(top_frac)
+    
+    @set_name("ProbCover")
+    def prob_cover_labeling(self):
+        return super().prob_cover_labeling()
+    
+    @set_name("TypiClust")
+    def typiclust_labeling(self):
+        return super().typiclust_labeling()
 
+    def test_methods(self, n_tests=2, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling, prob_cover_labeling, typiclust_labeling, dcom_labeling], plot=True, quiet=False):
+        return super().test_methods(n_tests, methods, plot, quiet)
