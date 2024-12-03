@@ -1053,7 +1053,6 @@ class ActiveLearning:
         
         return aggregated_results
 
-
 class DCoM(ActiveLearning):
     def __init__(self, dataObj, 
                  unlabelled_size, 
