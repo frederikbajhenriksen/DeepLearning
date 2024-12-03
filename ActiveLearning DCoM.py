@@ -490,7 +490,7 @@ class ActiveLearning:
         xs, ys, ds = [], [], []
         # distance computations are done in GPU
         if isinstance(self.dataObj.data, torch.Tensor):
-            combined_indices = torch.tensor(np.append(self.lSet, self.uSet))
+            combined_indices = torch.tensor(np.append(self.lSet, self.uSet), dtype=torch.long)
             features = self.dataObj.data[combined_indices].float()
         elif isinstance(self.dataObj.data, np.ndarray):
             combined_indices = np.concatenate((self.lSet, self.uSet))
@@ -1058,13 +1058,14 @@ class DCoM(ActiveLearning):
         self.deltas = []
         self.max_delta = self.delta
         self.lSet_deltas_dict = {}
-        
-        print(f"DCoM initialized with delta: {self.delta}, alpha: {alpha}, b: {b}")
-        print(f"Deltas: {self.deltas}, Max Delta: {self.max_delta}, lSet Deltas Dict: {self.lSet_deltas_dict}, Delta Avg: {self.delta_avg}")
 
-    def dcom_graph(self):
+        for i in self.lSet:
+            self.lSet_deltas_dict[i] = self.delta
+            self.deltas.append(self.delta)
+        
+    def dcom_graph(self,delta=None):
         self.delta_avg = np.mean(self.deltas)
-        df = self.construct_graph()
+        df = self.construct_graph(delta=self.delta_avg)
 
         edges_from_lSet_in_ball = np.isin(df.x, np.arange(len(self.lSet))) & (df.d < df.x.map(self.lSet_deltas_dict))
         covered_samples = df.y[edges_from_lSet_in_ball].unique()
@@ -1086,7 +1087,7 @@ class DCoM(ActiveLearning):
             covered_samples = df.y[np.isin(df.x, np.arange(len(self.lSet))) & (
                     df.d < df.x.map(self.lSet_deltas_dict))].unique()
             return len(covered_samples) / len(self.dataObj)
-        def calculate_margin(self):
+        def calculate_margin():
             self.model.eval()
             with torch.no_grad():
                 predictions = []
@@ -1095,28 +1096,30 @@ class DCoM(ActiveLearning):
                     outputs = self.model(images).softmax(dim=1)
                     predictions.extend(outputs.cpu().numpy())
             
-            predictions = torch.tensor(predictions)
+            predictions = torch.tensor(np.array(predictions))
             margins = predictions.topk(2, dim=1).values
             margin_uncertainty = margins[:, 0] - margins[:, 1] # TODO: Normalize as described in paper
             return margin_uncertainty
-        def out_degree_rank(self, df):
+        def out_degree_rank(df, indeces):
             """Calculates the out-degree rank of the graph nodes."""
             x = torch.tensor(df['x'].values)  # Ensure it's a 1D tensor
             degrees = torch.bincount(x, minlength=len(self.dataObj))
-            return degrees[self.uSet]
+            return degrees[torch.tensor(indeces,dtype=torch.long)].numpy()
+        
         # Delta Expansion
         self.delta_expansion()
 
         # Samples
         selected = []
         df = self.construct_graph(self.max_delta)
-        current_coverage = calculate_coverage(df, self.lSet, self.lSet_deltas_dict)
+        current_coverage = calculate_coverage(df)
         del df
 
         competence_score = get_competence_score(current_coverage)
 
+        margin_init = np.zeros(len(self.lSet))
         margin = calculate_margin()
-        margin[0:len(self.lSet)] = 0
+        margin = np.concatenate([margin_init,margin])
 
         cur_df, covered_samples = self.dcom_graph(self.delta_avg)
 
@@ -1127,42 +1130,48 @@ class DCoM(ActiveLearning):
             if len(cur_df) == 0:
                 ranks = np.zeros(len(combined_indices))
             else:
-                ranks = out_degree_rank(cur_df)
+                ranks = out_degree_rank(cur_df, combined_indices)
             
-            scores = competence_score * (1 - margin) + (1 - competence_score) * ranks
+            scores = competence_score * margin + (1 - competence_score) * ranks
             cur_selected = scores.argmax()
-            selected.append(cur_selected)
-            margin[cur_selected] = 0
-            
             new_covered_samples = cur_df.y[(cur_df.x == cur_selected)].values
-            if len(np.intersect1d(covered_samples, new_covered_samples)) > 0:
-                print(f"ERORR FEJL I DCOM")
-            covered_samples = np.concatenate([covered_samples, new_covered_samples])
+            assert len(np.intersect1d(covered_samples, new_covered_samples)) == 0, 'all samples should be new'
+
             cur_df = cur_df[(~np.isin(cur_df.y, new_covered_samples))]
+            covered_samples = np.concatenate([covered_samples, new_covered_samples])
 
+            margin[cur_selected] = 0
+            selected.append(cur_selected)
+
+        selected = np.array(selected)
+        print(f"DCoM selected: {selected}")
         self.transfer_unlabelled_to_labelled(selected, method_name = "DCoM")
-
 
     def delta_expansion(self):
         """ Perform binary search for the next delta values (DCoM)"""
         def calc_threshold(coverage):
             assert 0 <= coverage <= 1, 'coverage should be between 0 and 1'
             return 0.2 * coverage + 0.4
-        def check_purity(df, cent_label, delta):
+        def check_purity(df, cent_label, labels, delta):
             # Check purity of clusters
-            cluster_ids = np.unique(cent_label)
-            purities = []
-            for cluster in cluster_ids:
-                cluster_indices = np.where(cent_label == cluster)[0]
-                cluster_df = df[(np.isin(df.x, cluster_indices)) & (df.d < delta)]
-                same_label = np.isin(cluster_df.y, cluster_indices)
-                purity = same_label.sum() / len(cluster_df)
-                purities.append(purity)
-            return np.mean(purities)
-        
+            edges_from_lSet_in_ball = np.isin(df.x, np.arange(len(self.lSet))) & (df.d < delta)
+            neighbors = df.y[edges_from_lSet_in_ball].unique()
+
+            neighbors_label = labels[neighbors]
+            if isinstance(neighbors_label, torch.Tensor):
+                neighbors_label = neighbors_label.cpu().numpy()
+
+            if len(neighbors_label):
+                if isinstance(cent_label, torch.Tensor):
+                    cent_label = cent_label.item()
+                elif isinstance(cent_label, np.ndarray):
+                    cent_label = cent_label.item()
+
+                purity = np.sum(np.array(neighbors_label == cent_label)) / len(neighbors)
+                return purity
+            return 0
         new_deltas = []
         df = self.construct_graph(self.max_delta)
-
         covered_samples = df.y[np.isin(df.x, np.arange(len(self.lSet))) & (
                     df.d < df.x.map(self.lSet_deltas_dict))].unique()
         coverage = len(covered_samples) / len(self.dataObj)
@@ -1176,10 +1185,14 @@ class DCoM(ActiveLearning):
             for images, _ in self.unlabelled_loader():
                 images = images.to(self.device)
                 outputs = self.model(images).softmax(dim=1)
-                predictions.extend(outputs.detach().cpu().numpy())
-        labels = torch.tensor(predictions)
+                predicted_labels = outputs.argmax(dim=1)
+                predictions.extend(predicted_labels.detach().cpu().numpy())
 
-        for i in self.lSet:
+        lSet_labels = torch.tensor(np.array([self.dataObj.targets[i] for i in self.lSet]))
+        labels = torch.tensor(np.array(predictions)) 
+        labels = torch.cat([lSet_labels, labels])
+
+        for i in tqdm(self.lSet, desc='Calculating new deltas', disable=self.quiet):
             # if the index already has a delta skip
             if i in self.lSet_deltas_dict:
                 continue
@@ -1189,39 +1202,40 @@ class DCoM(ActiveLearning):
             mid_del_val = (low_del_val + max_del_val) / 2
             last_purity = 0
             last_delta = mid_del_val
-
+            cent_label = self.dataObj.targets[i].item()
             while abs(low_del_val - max_del_val) > 0.01:
-                curr_purity = check_purity(df, labels, mid_del_val)
+                curr_purity = check_purity(df, cent_label, labels, mid_del_val)
                 if curr_purity < purity_thrshold and last_purity == purity_thrshold and last_delta < mid_del_val:
                     mid_del_val = last_delta
                     break
+
+                if curr_purity < purity_thrshold:
+                    max_del_val = mid_del_val
                 elif curr_purity >= purity_thrshold:
                     low_del_val = mid_del_val
-                
                 last_purity = curr_purity
                 last_delta = mid_del_val
                 mid_del_val = (low_del_val + max_del_val) / 2
             
-            curr_purity = check_purity(df, labels, mid_del_val)
+            curr_purity = check_purity(df, cent_label, labels, mid_del_val)
             new_deltas.append(mid_del_val)
         
         self.deltas.extend(new_deltas)
-        self.max_delta = max(new_deltas)
+        if new_deltas:
+            self.max_delta = max(new_deltas)
         self.lSet_deltas_dict.update({i: d for i, d in zip(self.lSet, self.deltas)})
         print(f'New deltas added: {new_deltas}')
         return new_deltas
     
-    def test_dcom(self):
-        self.al_loop(self.dcom_labeling, title="DCoM")
-        self.reset_data()
-        return self.datapoint_list, self.accuracy_list
+    def compare_methods(self, methods=[dcom_labeling], no_plot=False):
+        return super().compare_methods(methods, no_plot)
 
 
 transform = torchvision.transforms.Compose([
     torchvision.transforms.ToTensor(),
     torchvision.transforms.Normalize((0.5,), (0.5,))
 ])
-train_dataset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
 
-ac = DCoM(train_dataset,unlabelled_size=0.99, label_iterations=2, b=10, num_epochs=30, quiet=False, debug=True)
-ac.test_dcom()
+train_dataset = torchvision.datasets.CIFAR10(root="./data_cifar", download=True, train=True)
+ac = DCoM(train_dataset,unlabelled_size=0.99, label_iterations=3, b=10, num_epochs=30, quiet=False, debug=False)
+ac.compare_methods()
