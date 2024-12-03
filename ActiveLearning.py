@@ -882,18 +882,22 @@ class ActiveLearning:
         plt.close()
         return datapoint_lists, accuracy_lists
 
-    def test_methods(self, n_tests = 2, 
+    def test_methods(self, n_tests = 10, 
                      methods=[random_sampling, least_confidence, 
                               margin_sampling, entropy_sampling, 
                               prob_cover_labeling, typiclust_labeling], 
                      plot=True, quiet = False):
         self.quiet = quiet
+
         # Initialize result dictionaries for each method
-        method_results = {method.__name__: {
-            'seed': [],
-            'datapoints': [],
-            'accuracies': []
-        } for method in methods}
+        method_results = {
+            'seed': [],  # Add a top-level seed key
+            **{method.__name__: {
+                'datapoints': [],
+                'accuracies': []
+            } for method in methods}
+        }
+
         
         for i in range(n_tests):
             # Set seeds

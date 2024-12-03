@@ -8,13 +8,11 @@ transform = torchvision.transforms.Compose([
     torchvision.transforms.ToTensor(),
     torchvision.transforms.Normalize((0.5,), (0.5,))
 ])
-train_dataset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
-
-ac = AL.ActiveLearning(train_dataset, 0.99, 2, 30, debug=True,quiet=True)
-ac.test_methods()
 
 train_dataset = torchvision.datasets.CIFAR10(root="./data_cifar", download=True, train=True)
-
-ac = AL.ActiveLearning(train_dataset, 0.99, 2, 30, debug=True,quiet=True)
+ac = AL.ActiveLearning(train_dataset, 0.99, 5, 30, delta=0.333, debug=False,quiet=True)
 ac.test_methods()
 
+train_dataset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
+ac = AL.ActiveLearning(train_dataset, 0.99, 5, 30, delta=0.778, debug=False,quiet=True)
+ac.test_methods()
