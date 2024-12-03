@@ -514,7 +514,7 @@ class ActiveLearning:
 
         # Create a sparse DataFrame to represent the graph
         return pd.DataFrame({'x': xs, 'y': ys, 'd': ds})
-    def approx_delta(self, alpha=0.95, max_delta=1, min_delta=0.01, random_shuffle=False):
+    def approx_delta(self, alpha=0.95, max_delta=1, min_delta=0.01, random_shuffle=True):
         """
         Approximate optimal delta using k-means clustering as pseudo-labels.
         delta* = max{delta : purity(delta) >= alpha}
@@ -900,7 +900,7 @@ class ActiveLearning:
             self.seed = np.random.randint(0, 100000)
             torch.manual_seed(self.seed)
             np.random.seed(self.seed)
-            method_results['seed'].append(self.seed)
+            method_results['seed'] = self.seed
 
             print(f"Starting Test {i}")  # Debug: Starting the test
             
@@ -1031,5 +1031,5 @@ class ActiveLearning:
 
         # Save to csv
         pd.DataFrame(aggregated_results).to_csv(f'test_methods_results_{self.data_name}.csv')
-        
+
         return aggregated_results

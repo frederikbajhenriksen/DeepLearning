@@ -179,6 +179,10 @@ class ActiveLearning:
 
         self.quiet = quiet
 
+        self.embeddings = None
+        if self.label_iterations > 1:
+            self.embeddings = self.extract_features()
+
         ########### 
         # ProbCover
         ###########
@@ -190,8 +194,9 @@ class ActiveLearning:
             self.delta = delta # TODO: Delta needs to be optimized as described in the paper
             if self.delta <= 0:
                 raise ValueError('Delta must be positive')
-            if self.delta >= 1:
+            elif self.delta >= 1:
                 print('Warning: Delta is very large, this may lead to a fully connected graph')
+            self.delta_avg = self.delta
         try:
             self.graph_df = self.construct_graph()
         except:
@@ -488,6 +493,7 @@ class ActiveLearning:
             delta = self.delta_avg
 
         xs, ys, ds = [], [], []
+        """
         # distance computations are done in GPU
         if isinstance(self.dataObj.data, torch.Tensor):
             combined_indices = torch.tensor(np.append(self.lSet, self.uSet), dtype=torch.long)
@@ -498,6 +504,8 @@ class ActiveLearning:
             features = torch.from_numpy(features).float()
         else:
             raise ValueError("Unsupported data type for dataset")
+        """
+        features = self.embeddings if self.embeddings is not None else self.extract_features()
         
         # Reshape images to 2D format (N, 784) for distance computation
         cuda_features = features.reshape(features.shape[0], -1)
@@ -533,6 +541,7 @@ class ActiveLearning:
         print(f"Approximating delta for purity > {alpha}")
         
         # Prepare features and labels
+        """
         if isinstance(self.dataObj.data, torch.Tensor):
             features = self.dataObj.data[torch.tensor(self.uSet)].reshape(len(self.uSet), -1).float()
         elif isinstance(self.dataObj.data, np.ndarray):
@@ -541,7 +550,8 @@ class ActiveLearning:
         else:
             raise ValueError("Unsupported data type for dataset")
         features = F.normalize(features, p=2, dim=1).to(self.device) # Normalize features 
-        
+        """
+        features = self.embeddings if self.embeddings is not None else self.extract_features()
         
         labels, _ = kmeans_torch(features, k=self.k)
         labels = labels.to(self.device)
@@ -632,23 +642,22 @@ class ActiveLearning:
     #########
     # Methods for TypiClust
     #########
-    def extract_features(self, cluster=False):
-        if cluster:
-            model = torchvision.models.resnet18(weights='ResNet18_Weights.DEFAULT')
-            # Adjust the first convolutional layer to accept one-channel input
-            if self.input_channels != 3:
-                # Adjust the first convolutional layer
-                model.conv1 = torch.nn.Conv2d(
-                    in_channels=self.input_channels,
-                    out_channels=64,
-                    kernel_size=7,
-                    stride=2,
-                    padding=3,
-                    bias=False
-                )
-            model.to(self.device)
-        else:
-            model = deepcopy(self.model)
+    def extract_features(self,):
+        """ Embed the data using a pre-trained model and return the penultimate layer features 
+        Should Ideally be a new model, with a projection head and a defferent loss function but this will have to do for now."""
+        model = torchvision.models.resnet18(weights='ResNet18_Weights.DEFAULT')
+        # Adjust the first convolutional layer to accept one-channel input
+        if self.input_channels != 3:
+            # Adjust the first convolutional layer
+            model.conv1 = torch.nn.Conv2d(
+                in_channels=self.input_channels,
+                out_channels=64,
+                kernel_size=7,
+                stride=2,
+                padding=3,
+                bias=False
+            )
+        model.to(self.device)
         
         # Remove the classification layer
         model.fc = torch.nn.Identity()
@@ -671,7 +680,7 @@ class ActiveLearning:
         if not self.quiet:
             print(f"Performing clustering with {num_clusters} clusters")
         # Features are the penultimate layer of the model
-        features = self.extract_features(cluster=True)
+        features = self.embeddings if self.embeddings is not None else self.extract_features()
 
         if not self.quiet:
             print("features extracted")
@@ -683,7 +692,7 @@ class ActiveLearning:
         # Extract features
         #features = self.dataObj.data[torch.tensor(self.uSet)].reshape(len(self.uSet), -1).float()
         #features = F.normalize(features, p=2, dim=1).to(self.device) # Normalize features 
-        features = self.extract_features()
+        features = self.embeddings if self.embeddings is not None else self.extract_features()
 
         # Handle minimum cluster size and sorting
         cluster_ids, cluster_sizes = np.unique(self.labels, return_counts=True)
@@ -1053,15 +1062,13 @@ class DCoM(ActiveLearning):
                  delta=None,
                  alpha=0.75,
                  quiet=False):
-        super().__init__(dataObj=dataObj, unlabelled_size=unlabelled_size, label_iterations=label_iterations, num_epochs=num_epochs, criterion=criterion, debug=debug, lr=lr, seed=seed, val_split=val_split, quiet=quiet)
+        super().__init__(dataObj=dataObj, unlabelled_size=unlabelled_size, label_iterations=label_iterations, num_epochs=num_epochs, criterion=criterion, debug=debug, lr=lr, seed=seed, val_split=val_split, quiet=quiet, delta=delta, alpha=alpha)
         
         self.deltas = []
         self.max_delta = self.delta
         self.lSet_deltas_dict = {}
 
-        for i in self.lSet:
-            self.lSet_deltas_dict[i] = self.delta
-            self.deltas.append(self.delta)
+        self.delta_expansion()
         
     def dcom_graph(self,delta=None):
         self.delta_avg = np.mean(self.deltas)
@@ -1202,7 +1209,7 @@ class DCoM(ActiveLearning):
             mid_del_val = (low_del_val + max_del_val) / 2
             last_purity = 0
             last_delta = mid_del_val
-            cent_label = self.dataObj.targets[i].item()
+            cent_label = self.dataObj.targets[i]
             while abs(low_del_val - max_del_val) > 0.01:
                 curr_purity = check_purity(df, cent_label, labels, mid_del_val)
                 if curr_purity < purity_thrshold and last_purity == purity_thrshold and last_delta < mid_del_val:
@@ -1230,12 +1237,3 @@ class DCoM(ActiveLearning):
     def compare_methods(self, methods=[dcom_labeling], no_plot=False):
         return super().compare_methods(methods, no_plot)
 
-
-transform = torchvision.transforms.Compose([
-    torchvision.transforms.ToTensor(),
-    torchvision.transforms.Normalize((0.5,), (0.5,))
-])
-
-train_dataset = torchvision.datasets.CIFAR10(root="./data_cifar", download=True, train=True)
-ac = DCoM(train_dataset,unlabelled_size=0.99, label_iterations=3, b=10, num_epochs=30, quiet=False, debug=False)
-ac.compare_methods()
