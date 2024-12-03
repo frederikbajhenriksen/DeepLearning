@@ -1156,7 +1156,8 @@ class DCoM(ActiveLearning):
             selected.append(cur_selected)
 
         selected = np.array(selected)
-        print(f"DCoM selected: {selected}")
+        if not self.quiet:
+            print(f"DCoM selected: {selected}")
         self.transfer_unlabelled_to_labelled(selected, method_name = "DCoM")
 
     def delta_expansion(self):
@@ -1189,7 +1190,8 @@ class DCoM(ActiveLearning):
         coverage = len(covered_samples) / len(self.dataObj)
 
         purity_thrshold = calc_threshold(coverage)
-        print(f'Current coverage is {coverage:.3f}, purity threshold is {purity_thrshold:.3f}')
+        if not self.quiet:
+            print(f'Current coverage is {coverage:.3f}, purity threshold is {purity_thrshold:.3f}')
 
         self.model.eval()
         predictions = []
@@ -1236,7 +1238,8 @@ class DCoM(ActiveLearning):
         if new_deltas:
             self.max_delta = max(new_deltas)
         self.lSet_deltas_dict.update({i: d for i, d in zip(self.lSet, self.deltas)})
-        print(f'New deltas added: {new_deltas}')
+        if not self.quiet:
+            print(f'New deltas added: {new_deltas}')
         return new_deltas
     
     def compare_methods(self, methods=[dcom_labeling], no_plot=False):
