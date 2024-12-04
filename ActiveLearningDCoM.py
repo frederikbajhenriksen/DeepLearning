@@ -1014,6 +1014,8 @@ class ActiveLearning:
         plt.savefig(f'test_methods_accuracy_{self.data_name}.png', dpi=300)
         plt.close()
 
+        # Save to csv
+        pd.DataFrame(aggregated_results).to_csv(f'test_methods_results_{self.data_name}.csv')
 
         random_sampling = aggregated_results['random_sampling']['mean_accuracy'].reshape(-1)
         random_sampling_err = aggregated_results['random_sampling']['error_accuracy'].reshape(-1)
@@ -1048,8 +1050,7 @@ class ActiveLearning:
         plt.savefig(f'test_methods_difference_{self.data_name}.png', dpi=300)
         plt.close()
 
-        # Save to csv
-        pd.DataFrame(aggregated_results).to_csv(f'test_methods_results_{self.data_name}.csv')
+        
         
         return aggregated_results
 
