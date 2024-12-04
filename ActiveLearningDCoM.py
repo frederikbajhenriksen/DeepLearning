@@ -852,7 +852,7 @@ class ActiveLearning:
     #########
     # Final functions
     #########
-    def Al_Loop(self, function, title="Random Sampling", plot=True):
+    def Al_Loop(self, function, title="Random Sampling", plot=True, increase_b=False):
         # Active Learning Loop
         datapoint_list = []  # To store the number of labeled datapoints for active learning
         accuracy_list = []  # To store accuracy after each iteration of active learning
@@ -872,6 +872,8 @@ class ActiveLearning:
             if plot:
                 self.visualize_decision_boundaries()
         self.reset_data()
+        if increase_b:
+            self.b = int(self.b * 2)
         return datapoint_list, accuracy_list
     
     def compare_methods(self, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling, prob_cover_labeling, typiclust_labeling], no_plot=False):
@@ -898,7 +900,7 @@ class ActiveLearning:
         plt.close()
         return datapoint_lists, accuracy_lists
 
-    def test_methods(self, n_tests=2, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling], plot=True, quiet=False):
+    def test_methods(self, n_tests=2, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling], plot=True, quiet=False, increase_b=False):
         self.quiet = quiet
 
         seeds = []
@@ -924,7 +926,7 @@ class ActiveLearning:
 
                 try:
                     # Run AL Loop
-                    datapoint_list, accuracy_list = self.Al_Loop(method, title=method_name, plot=plot)
+                    datapoint_list, accuracy_list = self.Al_Loop(method, title=method_name, plot=plot,increase_b=increase_b)
                     print(f"Method {method_name} completed successfully.")
 
                     # Store results by method
@@ -1243,5 +1245,5 @@ class DCoM(ActiveLearning):
     def typiclust_labeling(self):
         return super().typiclust_labeling()
 
-    def test_methods(self, n_tests=2, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling, prob_cover_labeling, typiclust_labeling, dcom_labeling], plot=True, quiet=False):
-        return super().test_methods(n_tests, methods, plot, quiet)
+    def test_methods(self, n_tests=2, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling, prob_cover_labeling, typiclust_labeling, dcom_labeling], plot=True, quiet=False, increase_b=False):
+        return super().test_methods(n_tests, methods, plot, quiet, increase_b)
