@@ -898,160 +898,133 @@ class ActiveLearning:
         plt.close()
         return datapoint_lists, accuracy_lists
 
-    def test_methods(self, n_tests = 2, 
-                     methods=[random_sampling, least_confidence, 
-                              margin_sampling, entropy_sampling, 
-                              prob_cover_labeling, typiclust_labeling], 
-                     plot=True, quiet = False):
+    def test_methods(self, n_tests=2, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling], plot=True, quiet=False):
         self.quiet = quiet
-        # Initialize result dictionaries for each method
+
+        seeds = []
         method_results = {
-            'seed': [],  # Add a top-level seed key
-            **{method.__name__: {
+            method.__name__: {
                 'datapoints': [],
                 'accuracies': []
-            } for method in methods}
+            } for method in methods
         }
-        
+
         for i in range(n_tests):
             # Set seeds
-            self.seed = np.random.randint(0, 100000)
-            torch.manual_seed(self.seed)
-            np.random.seed(self.seed)
-            method_results['seed'].append(self.seed)
+            seed = np.random.randint(0, 100000)
+            torch.manual_seed(seed)
+            np.random.seed(seed)
+            seeds.append(seed)
 
-            print(f"Starting Test {i}")  # Debug: Starting the test
-            
+            print(f"Starting Test {i}")
+
             for method in tqdm(methods, desc=f"Test {i}"):
-                print(f"Starting method: {method.__name__}")  # Debug: Starting the method
-                
+                method_name = method.__name__
+                print(f"Starting method: {method_name}")
+
                 try:
                     # Run AL Loop
-                    datapoint_list, accuracy_list = self.Al_Loop(method, title=method.__name__, plot=plot)
-                    print(f"Method {method.__name__} completed successfully.")  # Debug: Method completed
+                    datapoint_list, accuracy_list = self.Al_Loop(method, title=method_name, plot=plot)
+                    print(f"Method {method_name} completed successfully.")
 
                     # Store results by method
-                    method_results[method.__name__]['datapoints'].append(np.array(datapoint_list))
-                    method_results[method.__name__]['accuracies'].append(np.array(accuracy_list))
-                
+                    method_results[method_name]['datapoints'].append(np.array(datapoint_list))
+                    method_results[method_name]['accuracies'].append(np.array(accuracy_list))
+
                 except Exception as e:
-                    print(f"Error in method {method.__name__}: {e}")  # Debug: Capture any errors
-                
+                    print(f"Error in method {method_name}: {e}")
+
                 if not self.quiet:
-                    print(f"Test {i} {method.__name__} done.")
-            
-            # Debug: Method results summary after all iterations
+                    print(f"Test {i} {method_name} done.")
+
             print(f"Results after Test {i}: {method_results}")
 
-        # Map method names to consistent keys
+        # Map method names to display names
         method_key_map = {
-            'Random Sampling': 'random_sampling',
-            'Least Confidence': 'least_confidence',
-            'Margin Sampling': 'margin_sampling',
-            'Entropy Sampling': 'entropy_sampling',
-            'ProbCover': 'prob_cover_labeling',
-            'TypiClust': 'typiclust_labeling',
-            'DCoM': 'dcom_labeling'
+            'random_sampling': 'Random Sampling',
+            'least_confidence': 'Least Confidence',
+            'margin_sampling': 'Margin Sampling',
+            'entropy_sampling': 'Entropy Sampling',
+            'prob_cover_labeling': 'ProbCover',
+            'typiclust_labeling': 'TypiClust',
+            'dcom_labeling': 'DCoM'
         }
 
         # Calculate statistics for each method
         aggregated_results = {}
         for method_name, results in method_results.items():
-            print(f"Processing method: {method_name}")  # Debug: Method name
+            print(f"Processing method: {method_name}")
             try:
-                # Get the standardized key
-                standardized_key = method_key_map.get(method_name)
-                if not standardized_key:
-                    print(f"Method {method_name} does not have a predefined key. Skipping...")
-                    continue
-
-                # Convert lists to arrays for calculations
-                print(f"Raw datapoints: {results['datapoints']}")  # Debug: Raw datapoints
-                print(f"Raw accuracies: {results['accuracies']}")  # Debug: Raw accuracies
+                display_name = method_key_map.get(method_name, method_name)
 
                 datapoints = np.array(results['datapoints'])
                 accuracies = np.array(results['accuracies'])
 
-                # Debug: Shape and content of arrays
-                print(f"{method_name} datapoints (array): {datapoints.shape}, content: {datapoints}")
-                print(f"{method_name} accuracies (array): {accuracies.shape}, content: {accuracies}")
-
-                # Calculate mean and error
                 mean_accuracy = accuracies.mean(axis=0)
                 error_accuracy = accuracies.std(axis=0)
                 error_accuracy = 1.96 * error_accuracy / np.sqrt(n_tests)  # 95% CI
 
-                # Store results using the standardized key
-                aggregated_results[standardized_key] = {
-                    'seed': results['seed'],
+                aggregated_results[method_name] = {
+                    'seed': seeds,
                     'datapoints': datapoints,
                     'mean_accuracy': mean_accuracy,
-                    'error_accuracy': error_accuracy
+                    'error_accuracy': error_accuracy,
+                    'display_name': display_name
                 }
-                print(f"Aggregated results for {standardized_key}: {aggregated_results[standardized_key]}")  # Debug: Aggregated results
+                print(f"Aggregated results for {method_name}: {aggregated_results[method_name]}")
+
             except Exception as e:
-                print(f"Error processing method {method_name}: {e}")  # Debug: Error message
+                print(f"Error processing method {method_name}: {e}")
 
-
-
+        # Plotting
         plt.figure(figsize=(10, 5))
         for method_name, results in aggregated_results.items():
-            # Get correct shapes for plotting
             x = results['datapoints'].mean(axis=0)
-            y = results['mean_accuracy'].reshape(-1)  # Flatten to 1D
-            yerr = results['error_accuracy'].reshape(-1)  # Flatten to 1D
-            
-            plt.errorbar(x, y, 
-                        yerr=yerr,
-                        label=method_name,
-                        capsize=3)
-        
+            y = results['mean_accuracy'].reshape(-1)
+            yerr = results['error_accuracy'].reshape(-1)
+            label = results.get('display_name', method_name)
+
+            plt.errorbar(x, y, yerr=yerr, label=label, capsize=3)
+
         plt.xlabel('Datapoints')
         plt.ylabel('Accuracy')
         plt.legend()
         plt.tight_layout()
-        # plt.show()
         plt.savefig(f'test_methods_accuracy_{self.data_name}.png', dpi=300)
         plt.close()
 
-        # Save to csv
+        # Save results to CSV
         pd.DataFrame(aggregated_results).to_csv(f'test_methods_results_{self.data_name}.csv')
 
-        random_sampling = aggregated_results['random_sampling']['mean_accuracy'].reshape(-1)
-        random_sampling_err = aggregated_results['random_sampling']['error_accuracy'].reshape(-1)
+        # Plotting difference from Random Sampling
+        if 'Random Sampling' in aggregated_results:
+            random_sampling = aggregated_results['Random Sampling']['mean_accuracy'].reshape(-1)
+            random_sampling_err = aggregated_results['Random Sampling']['error_accuracy'].reshape(-1)
 
-        plt.figure(figsize=(10, 5))
-        for method_name, results in aggregated_results.items():
-            # TAke the difference from random sampling
-            try:
+            plt.figure(figsize=(10, 5))
+            for method_name, results in aggregated_results.items():
+                if method_name == 'random_sampling':
+                    continue  # Skip plotting difference for baseline
+
                 x = results['datapoints'].mean(axis=0)
                 y = results['mean_accuracy'].reshape(-1)
                 yerr = results['error_accuracy'].reshape(-1)
+                label = results.get('display_name', method_name)
 
-                # Debugging: Print shapes and content
-                print(f"{method_name} x shape: {x.shape}, content: {x}")
-                print(f"{method_name} y shape: {y.shape}, content: {y}")
-                print(f"{method_name} yerr shape: {yerr.shape}, content: {yerr}")
+                y_diff = y - random_sampling
+                yerr_diff = np.sqrt(yerr**2 + random_sampling_err**2)
 
-                y = y - random_sampling
-                yerr = np.sqrt(yerr**2 + random_sampling_err**2)
-                plt.errorbar(x, y, 
-                            yerr=yerr,
-                            label=method_name,
-                            capsize=3)
-            except Exception as e:
-                print(f"Error plotting method {method_name}: {e}")
+                plt.errorbar(x, y_diff, yerr=yerr_diff, label=label, capsize=3)
 
-        plt.xlabel('Datapoints')
-        plt.ylabel('Accuracy Difference from Random Sampling')
-        plt.legend()
-        plt.tight_layout()
-        #plt.show()
-        plt.savefig(f'test_methods_difference_{self.data_name}.png', dpi=300)
-        plt.close()
+            plt.xlabel('Datapoints')
+            plt.ylabel('Accuracy Difference from Random Sampling')
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(f'test_methods_difference_{self.data_name}.png', dpi=300)
+            plt.close()
+        else:
+            print("Warning: Random Sampling results not found. Cannot plot differences.")
 
-        
-        
         return aggregated_results
 
 class DCoM(ActiveLearning):
