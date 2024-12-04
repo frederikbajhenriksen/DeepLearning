@@ -179,17 +179,24 @@ class ActiveLearning:
 
         self.quiet = quiet
 
+        self.embeddings = None
+        if self.label_iterations > 1:
+            self.embeddings = self.extract_features()
+
         ########### 
         # ProbCover
         ###########
+        print(delta)
         if delta is None:
             self.approx_delta(alpha)
+            self.delta_avg = self.delta
         else:
             self.delta = delta # TODO: Delta needs to be optimized as described in the paper
             if self.delta <= 0:
                 raise ValueError('Delta must be positive')
-            if self.delta >= 1:
+            elif self.delta >= 1:
                 print('Warning: Delta is very large, this may lead to a fully connected graph')
+            self.delta_avg = self.delta
         try:
             self.graph_df = self.construct_graph()
         except:
@@ -475,17 +482,21 @@ class ActiveLearning:
     #########
     # Methods for ProbCover
     #########
-    def construct_graph(self, batch_size=500):
+    def construct_graph(self, delta=None, batch_size=500):
         """ Construct a graph based on the distance between unlabelled and labelled samples
         Args:
             batch_size: Batch size for processing samples
         Returns:
             DataFrame: Graph representation with columns x, y, d
         """
+        if delta is None:
+            delta = self.delta_avg
+
         xs, ys, ds = [], [], []
+        """
         # distance computations are done in GPU
         if isinstance(self.dataObj.data, torch.Tensor):
-            combined_indices = torch.tensor(np.append(self.lSet, self.uSet))
+            combined_indices = torch.tensor(np.append(self.lSet, self.uSet), dtype=torch.long)
             features = self.dataObj.data[combined_indices].float()
         elif isinstance(self.dataObj.data, np.ndarray):
             combined_indices = np.concatenate((self.lSet, self.uSet))
@@ -493,6 +504,8 @@ class ActiveLearning:
             features = torch.from_numpy(features).float()
         else:
             raise ValueError("Unsupported data type for dataset")
+        """
+        features = self.embeddings if self.embeddings is not None else self.extract_features()
         
         # Reshape images to 2D format (N, 784) for distance computation
         cuda_features = features.reshape(features.shape[0], -1)
@@ -514,7 +527,7 @@ class ActiveLearning:
 
         # Create a sparse DataFrame to represent the graph
         return pd.DataFrame({'x': xs, 'y': ys, 'd': ds})
-    def approx_delta(self, alpha=0.95, max_delta=1, min_delta=0.01, random_shuffle=True):
+    def approx_delta(self, alpha=0.95, max_delta=1, min_delta=0.01, random_shuffle=False):
         """
         Approximate optimal delta using k-means clustering as pseudo-labels.
         delta* = max{delta : purity(delta) >= alpha}
@@ -528,6 +541,7 @@ class ActiveLearning:
         print(f"Approximating delta for purity > {alpha}")
         
         # Prepare features and labels
+        """
         if isinstance(self.dataObj.data, torch.Tensor):
             features = self.dataObj.data[torch.tensor(self.uSet)].reshape(len(self.uSet), -1).float()
         elif isinstance(self.dataObj.data, np.ndarray):
@@ -536,7 +550,8 @@ class ActiveLearning:
         else:
             raise ValueError("Unsupported data type for dataset")
         features = F.normalize(features, p=2, dim=1).to(self.device) # Normalize features 
-        
+        """
+        features = self.embeddings if self.embeddings is not None else self.extract_features()
         
         labels, _ = kmeans_torch(features, k=self.k)
         labels = labels.to(self.device)
@@ -627,23 +642,24 @@ class ActiveLearning:
     #########
     # Methods for TypiClust
     #########
-    def extract_features(self, cluster=False):
-        if cluster:
-            model = torchvision.models.resnet18(weights='ResNet18_Weights.DEFAULT')
-            # Adjust the first convolutional layer to accept one-channel input
-            if self.input_channels != 3:
-                # Adjust the first convolutional layer
-                model.conv1 = torch.nn.Conv2d(
-                    in_channels=self.input_channels,
-                    out_channels=64,
-                    kernel_size=7,
-                    stride=2,
-                    padding=3,
-                    bias=False
-                )
-            model.to(self.device)
-        else:
-            model = deepcopy(self.model)
+    def extract_features(self,):
+        """ Embed the data using a pre-trained model and return the penultimate layer features 
+        Should Ideally be a new model, with a projection head and a defferent loss function but this will have to do for now.
+        Contrastive loss might be good.
+        Even more ideal would be using a unsupervised model like SCAN or DINO, but that requires an additional amount of work."""
+        model = torchvision.models.resnet18(weights='ResNet18_Weights.DEFAULT')
+        # Adjust the first convolutional layer to accept one-channel input
+        if self.input_channels != 3:
+            # Adjust the first convolutional layer
+            model.conv1 = torch.nn.Conv2d(
+                in_channels=self.input_channels,
+                out_channels=64,
+                kernel_size=7,
+                stride=2,
+                padding=3,
+                bias=False
+            )
+        model.to(self.device)
         
         # Remove the classification layer
         model.fc = torch.nn.Identity()
@@ -666,7 +682,7 @@ class ActiveLearning:
         if not self.quiet:
             print(f"Performing clustering with {num_clusters} clusters")
         # Features are the penultimate layer of the model
-        features = self.extract_features(cluster=True)
+        features = self.embeddings if self.embeddings is not None else self.extract_features()
 
         if not self.quiet:
             print("features extracted")
@@ -678,7 +694,7 @@ class ActiveLearning:
         # Extract features
         #features = self.dataObj.data[torch.tensor(self.uSet)].reshape(len(self.uSet), -1).float()
         #features = F.normalize(features, p=2, dim=1).to(self.device) # Normalize features 
-        features = self.extract_features()
+        features = self.embeddings if self.embeddings is not None else self.extract_features()
 
         # Handle minimum cluster size and sorting
         cluster_ids, cluster_sizes = np.unique(self.labels, return_counts=True)
@@ -836,7 +852,7 @@ class ActiveLearning:
     #########
     # Final functions
     #########
-    def Al_Loop(self, function, title="Random Sampling", plot=True):
+    def Al_Loop(self, function, title="Random Sampling", plot=True, increase_b=False):
         # Active Learning Loop
         datapoint_list = []  # To store the number of labeled datapoints for active learning
         accuracy_list = []  # To store accuracy after each iteration of active learning
@@ -856,6 +872,8 @@ class ActiveLearning:
             if plot:
                 self.visualize_decision_boundaries()
         self.reset_data()
+        if increase_b:
+            self.b = int(self.b * 2)
         return datapoint_list, accuracy_list
     
     def compare_methods(self, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling, prob_cover_labeling, typiclust_labeling], no_plot=False):
@@ -882,158 +900,349 @@ class ActiveLearning:
         plt.close()
         return datapoint_lists, accuracy_lists
 
-    def test_methods(self, n_tests = 10, 
-                     methods=[random_sampling, least_confidence, 
-                              margin_sampling, entropy_sampling, 
-                              prob_cover_labeling, typiclust_labeling], 
-                     plot=True, quiet = False):
+    def test_methods(self, n_tests=2, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling], plot=True, quiet=False, increase_b=False):
         self.quiet = quiet
 
-        # Initialize result dictionaries for each method
+        seeds = []
         method_results = {
-            'seed': [],  # Add a top-level seed key
-            **{method.__name__: {
+            method.__name__: {
                 'datapoints': [],
                 'accuracies': []
-            } for method in methods}
+            } for method in methods
         }
 
-        
         for i in range(n_tests):
             # Set seeds
-            self.seed = np.random.randint(0, 100000)
-            torch.manual_seed(self.seed)
-            np.random.seed(self.seed)
-            method_results['seed'] = self.seed
+            seed = np.random.randint(0, 100000)
+            torch.manual_seed(seed)
+            np.random.seed(seed)
+            seeds.append(seed)
 
-            print(f"Starting Test {i}")  # Debug: Starting the test
-            
+            print(f"Starting Test {i}")
+
             for method in tqdm(methods, desc=f"Test {i}"):
-                print(f"Starting method: {method.__name__}")  # Debug: Starting the method
-                
+                method_name = method.__name__
+                print(f"Starting method: {method_name}")
+
                 try:
                     # Run AL Loop
-                    datapoint_list, accuracy_list = self.Al_Loop(method, title=method.__name__, plot=plot)
-                    print(f"Method {method.__name__} completed successfully.")  # Debug: Method completed
+                    datapoint_list, accuracy_list = self.Al_Loop(method, title=method_name, plot=plot,increase_b=increase_b)
+                    print(f"Method {method_name} completed successfully.")
 
                     # Store results by method
-                    method_results[method.__name__]['datapoints'].append(np.array(datapoint_list))
-                    method_results[method.__name__]['accuracies'].append(np.array(accuracy_list))
-                
+                    method_results[method_name]['datapoints'].append(np.array(datapoint_list))
+                    method_results[method_name]['accuracies'].append(np.array(accuracy_list))
+
                 except Exception as e:
-                    print(f"Error in method {method.__name__}: {e}")  # Debug: Capture any errors
-                
+                    print(f"Error in method {method_name}: {e}")
+
                 if not self.quiet:
-                    print(f"Test {i} {method.__name__} done.")
-            
-            # Debug: Method results summary after all iterations
+                    print(f"Test {i} {method_name} done.")
+
             print(f"Results after Test {i}: {method_results}")
 
-        # Map method names to consistent keys
+        # Map method names to display names
         method_key_map = {
-            'Random Sampling': 'random_sampling',
-            'Least Confidence': 'least_confidence',
-            'Margin Sampling': 'margin_sampling',
-            'Entropy Sampling': 'entropy_sampling',
-            'ProbCover': 'prob_cover_labeling',
-            'TypiClust': 'typiclust_labeling',
-            'DCoM': 'dcom_labeling'
+            'random_sampling': 'Random Sampling',
+            'least_confidence': 'Least Confidence',
+            'margin_sampling': 'Margin Sampling',
+            'entropy_sampling': 'Entropy Sampling',
+            'prob_cover_labeling': 'ProbCover',
+            'typiclust_labeling': 'TypiClust',
+            'dcom_labeling': 'DCoM'
         }
 
         # Calculate statistics for each method
         aggregated_results = {}
         for method_name, results in method_results.items():
-            print(f"Processing method: {method_name}")  # Debug: Method name
+            print(f"Processing method: {method_name}")
             try:
-                # Get the standardized key
-                standardized_key = method_key_map.get(method_name)
-                if not standardized_key:
-                    print(f"Method {method_name} does not have a predefined key. Skipping...")
-                    continue
-
-                # Convert lists to arrays for calculations
-                print(f"Raw datapoints: {results['datapoints']}")  # Debug: Raw datapoints
-                print(f"Raw accuracies: {results['accuracies']}")  # Debug: Raw accuracies
+                display_name = method_key_map.get(method_name, method_name)
 
                 datapoints = np.array(results['datapoints'])
                 accuracies = np.array(results['accuracies'])
 
-                # Debug: Shape and content of arrays
-                print(f"{method_name} datapoints (array): {datapoints.shape}, content: {datapoints}")
-                print(f"{method_name} accuracies (array): {accuracies.shape}, content: {accuracies}")
-
-                # Calculate mean and error
                 mean_accuracy = accuracies.mean(axis=0)
                 error_accuracy = accuracies.std(axis=0)
                 error_accuracy = 1.96 * error_accuracy / np.sqrt(n_tests)  # 95% CI
 
-                # Store results using the standardized key
-                aggregated_results[standardized_key] = {
+                aggregated_results[method_name] = {
+                    'seed': seeds,
                     'datapoints': datapoints,
                     'mean_accuracy': mean_accuracy,
-                    'error_accuracy': error_accuracy
+                    'error_accuracy': error_accuracy,
+                    'display_name': display_name
                 }
-                print(f"Aggregated results for {standardized_key}: {aggregated_results[standardized_key]}")  # Debug: Aggregated results
+                print(f"Aggregated results for {method_name}: {aggregated_results[method_name]}")
             except Exception as e:
-                print(f"Error processing method {method_name}: {e}")  # Debug: Error message
+                print(f"Error processing method {method_name}: {e}")
 
-
-
+        # Plotting
         plt.figure(figsize=(10, 5))
         for method_name, results in aggregated_results.items():
-            # Get correct shapes for plotting
             x = results['datapoints'].mean(axis=0)
-            y = results['mean_accuracy'].reshape(-1)  # Flatten to 1D
-            yerr = results['error_accuracy'].reshape(-1)  # Flatten to 1D
-            
-            plt.errorbar(x, y, 
-                        yerr=yerr,
-                        label=method_name,
-                        capsize=3)
-        
+            y = results['mean_accuracy'].reshape(-1)
+            yerr = results['error_accuracy'].reshape(-1)
+            label = results.get('display_name', method_name)
+
+            plt.errorbar(x, y, yerr=yerr, label=label, capsize=3)
+
         plt.xlabel('Datapoints')
         plt.ylabel('Accuracy')
         plt.legend()
         plt.tight_layout()
-        # plt.show()
         plt.savefig(f'test_methods_accuracy_{self.data_name}.png', dpi=300)
         plt.close()
 
+        # Save results to CSV
+        pd.DataFrame(aggregated_results).to_csv(f'test_methods_results_{self.data_name}.csv')
 
-        random_sampling = aggregated_results['random_sampling']['mean_accuracy'].reshape(-1)
-        random_sampling_err = aggregated_results['random_sampling']['error_accuracy'].reshape(-1)
+        # Plotting difference from Random Sampling
+        if 'Random Sampling' in aggregated_results:
+            random_sampling = aggregated_results['Random Sampling']['mean_accuracy'].reshape(-1)
+            random_sampling_err = aggregated_results['Random Sampling']['error_accuracy'].reshape(-1)
 
-        plt.figure(figsize=(10, 5))
-        for method_name, results in aggregated_results.items():
-            # TAke the difference from random sampling
-            try:
+            plt.figure(figsize=(10, 5))
+            for method_name, results in aggregated_results.items():
+                if method_name == 'random_sampling':
+                    continue  # Skip plotting difference for baseline
+
                 x = results['datapoints'].mean(axis=0)
                 y = results['mean_accuracy'].reshape(-1)
                 yerr = results['error_accuracy'].reshape(-1)
+                label = results.get('display_name', method_name)
 
-                # Debugging: Print shapes and content
-                print(f"{method_name} x shape: {x.shape}, content: {x}")
-                print(f"{method_name} y shape: {y.shape}, content: {y}")
-                print(f"{method_name} yerr shape: {yerr.shape}, content: {yerr}")
+                y_diff = y - random_sampling
+                yerr_diff = np.sqrt(yerr**2 + random_sampling_err**2)
 
-                y = y - random_sampling
-                yerr = np.sqrt(yerr**2 + random_sampling_err**2)
-                plt.errorbar(x, y, 
-                            yerr=yerr,
-                            label=method_name,
-                            capsize=3)
-            except Exception as e:
-                print(f"Error plotting method {method_name}: {e}")
+                plt.errorbar(x, y_diff, yerr=yerr_diff, label=label, capsize=3)
 
-        plt.xlabel('Datapoints')
-        plt.ylabel('Accuracy Difference from Random Sampling')
-        plt.legend()
-        plt.tight_layout()
-        #plt.show()
-        plt.savefig(f'test_methods_difference_{self.data_name}.png', dpi=300)
-        plt.close()
-
-        # Save to csv
-        pd.DataFrame(aggregated_results).to_csv(f'test_methods_results_{self.data_name}.csv')
+            plt.xlabel('Datapoints')
+            plt.ylabel('Accuracy Difference from Random Sampling')
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(f'test_methods_difference_{self.data_name}.png', dpi=300)
+            plt.close()
+        else:
+            print("Warning: Random Sampling results not found. Cannot plot differences.")
 
         return aggregated_results
+
+class DCoM(ActiveLearning):
+    def __init__(self, dataObj, 
+                 unlabelled_size, 
+                 label_iterations, 
+                 num_epochs,criterion=torch.nn.CrossEntropyLoss(), 
+                 debug=False, 
+                 lr=0.0005, 
+                 seed=0, 
+                 val_split=0.1, 
+                 b=25,
+                 delta=None,
+                 alpha=0.75,
+                 quiet=False):
+        super().__init__(dataObj=dataObj, unlabelled_size=unlabelled_size, label_iterations=label_iterations, num_epochs=num_epochs, criterion=criterion, debug=debug, lr=lr, seed=seed, val_split=val_split, quiet=quiet, delta=delta, alpha=alpha)
+        
+        self.deltas = []
+        self.max_delta = self.delta
+        self.lSet_deltas_dict = {}
+
+        self.delta_expansion()
+        
+    def dcom_graph(self,delta=None):
+        self.delta_avg = np.mean(self.deltas)
+        df = self.construct_graph(delta=self.delta_avg)
+
+        edges_from_lSet_in_ball = np.isin(df.x, np.arange(len(self.lSet))) & (df.d < df.x.map(self.lSet_deltas_dict))
+        covered_samples = df.y[edges_from_lSet_in_ball].unique()
+
+        edges_to_covered_samples = np.isin(df.y, covered_samples)
+        all_edges_from_lSet = np.isin(df.x, np.arange(len(self.lSet)))
+
+        mask = all_edges_from_lSet | edges_to_covered_samples
+        df_filtered = df[~mask]
+        return df_filtered, covered_samples
+
+    @set_name("DCoM")
+    def dcom_labeling(self):
+        def get_competence_score(coverage):
+            a = 0.9 # From paper
+            k = 30 # from paper
+            p = (1 + np.exp(-k * (coverage - a)))**-1
+            return p * (1 + np.exp(-k * (coverage - a)))
+        def calculate_coverage(df):
+            covered_samples = df.y[np.isin(df.x, np.arange(len(self.lSet))) & (
+                    df.d < df.x.map(self.lSet_deltas_dict))].unique()
+            return len(covered_samples) / len(self.dataObj)
+        def calculate_margin():
+            self.model.eval()
+            with torch.no_grad():
+                predictions = []
+                for images, _ in self.unlabelled_loader():
+                    images = images.to(self.device)
+                    outputs = self.model(images).softmax(dim=1)
+                    predictions.extend(outputs.cpu().numpy())
+            
+            predictions = torch.tensor(np.array(predictions))
+            margins = predictions.topk(2, dim=1).values
+            margin_uncertainty = margins[:, 0] - margins[:, 1] # TODO: Normalize as described in paper
+            return margin_uncertainty
+        def out_degree_rank(df, indeces):
+            """Calculates the out-degree rank of the graph nodes."""
+            x = torch.tensor(df['x'].values)  # Ensure it's a 1D tensor
+            degrees = torch.bincount(x, minlength=len(self.dataObj))
+            return degrees[torch.tensor(indeces,dtype=torch.long)].numpy()
+        
+        # Delta Expansion
+        self.delta_expansion()
+
+        # Samples
+        selected = []
+        df = self.construct_graph(self.max_delta)
+        current_coverage = calculate_coverage(df)
+        del df
+
+        competence_score = get_competence_score(current_coverage)
+
+        margin_init = np.zeros(len(self.lSet))
+        margin = calculate_margin()
+        margin = np.concatenate([margin_init,margin])
+
+        cur_df, covered_samples = self.dcom_graph(self.delta_avg)
+
+        combined_indices = torch.tensor(np.append(self.lSet, self.uSet))
+
+        for i in range(self.b):
+            coverage = len(covered_samples) / len(self.dataObj)
+            if len(cur_df) == 0:
+                ranks = np.zeros(len(combined_indices))
+            else:
+                ranks = out_degree_rank(cur_df, combined_indices)
+            
+            scores = competence_score * margin + (1 - competence_score) * ranks
+            cur_selected = scores.argmax()
+            new_covered_samples = cur_df.y[(cur_df.x == cur_selected)].values
+            assert len(np.intersect1d(covered_samples, new_covered_samples)) == 0, 'all samples should be new'
+
+            cur_df = cur_df[(~np.isin(cur_df.y, new_covered_samples))]
+            covered_samples = np.concatenate([covered_samples, new_covered_samples])
+
+            margin[cur_selected] = 0
+            selected.append(cur_selected)
+
+        selected = np.array(selected)
+        if not self.quiet:
+            print(f"DCoM selected: {selected}")
+        self.transfer_unlabelled_to_labelled(selected, method_name = "DCoM")
+
+    def delta_expansion(self):
+        """ Perform binary search for the next delta values (DCoM)"""
+        def calc_threshold(coverage):
+            assert 0 <= coverage <= 1, 'coverage should be between 0 and 1'
+            return 0.2 * coverage + 0.4
+        def check_purity(df, cent_label, labels, delta):
+            # Check purity of clusters
+            edges_from_lSet_in_ball = np.isin(df.x, np.arange(len(self.lSet))) & (df.d < delta)
+            neighbors = df.y[edges_from_lSet_in_ball].unique()
+
+            neighbors_label = labels[neighbors]
+            if isinstance(neighbors_label, torch.Tensor):
+                neighbors_label = neighbors_label.cpu().numpy()
+
+            if len(neighbors_label):
+                if isinstance(cent_label, torch.Tensor):
+                    cent_label = cent_label.item()
+                elif isinstance(cent_label, np.ndarray):
+                    cent_label = cent_label.item()
+
+                purity = np.sum(np.array(neighbors_label == cent_label)) / len(neighbors)
+                return purity
+            return 0
+        new_deltas = []
+        df = self.construct_graph(self.max_delta)
+        covered_samples = df.y[np.isin(df.x, np.arange(len(self.lSet))) & (
+                    df.d < df.x.map(self.lSet_deltas_dict))].unique()
+        coverage = len(covered_samples) / len(self.dataObj)
+
+        purity_thrshold = calc_threshold(coverage)
+        if not self.quiet:
+            print(f'Current coverage is {coverage:.3f}, purity threshold is {purity_thrshold:.3f}')
+
+        self.model.eval()
+        predictions = []
+        with torch.no_grad():
+            for images, _ in self.unlabelled_loader():
+                images = images.to(self.device)
+                outputs = self.model(images).softmax(dim=1)
+                predicted_labels = outputs.argmax(dim=1)
+                predictions.extend(predicted_labels.detach().cpu().numpy())
+
+        lSet_labels = torch.tensor(np.array([self.dataObj.targets[i] for i in self.lSet]))
+        labels = torch.tensor(np.array(predictions)) 
+        labels = torch.cat([lSet_labels, labels])
+
+        for i in tqdm(self.lSet, desc='Calculating new deltas', disable=self.quiet):
+            # if the index already has a delta skip
+            if i in self.lSet_deltas_dict:
+                continue
+
+            low_del_val = 0
+            max_del_val = self.max_delta
+            mid_del_val = (low_del_val + max_del_val) / 2
+            last_purity = 0
+            last_delta = mid_del_val
+            cent_label = self.dataObj.targets[i]
+            while abs(low_del_val - max_del_val) > 0.01:
+                curr_purity = check_purity(df, cent_label, labels, mid_del_val)
+                if curr_purity < purity_thrshold and last_purity == purity_thrshold and last_delta < mid_del_val:
+                    mid_del_val = last_delta
+                    break
+
+                if curr_purity < purity_thrshold:
+                    max_del_val = mid_del_val
+                elif curr_purity >= purity_thrshold:
+                    low_del_val = mid_del_val
+                last_purity = curr_purity
+                last_delta = mid_del_val
+                mid_del_val = (low_del_val + max_del_val) / 2
+            
+            curr_purity = check_purity(df, cent_label, labels, mid_del_val)
+            new_deltas.append(mid_del_val)
+        
+        self.deltas.extend(new_deltas)
+        if new_deltas:
+            self.max_delta = max(new_deltas)
+        self.lSet_deltas_dict.update({i: d for i, d in zip(self.lSet, self.deltas)})
+        if not self.quiet:
+            print(f'New deltas added: {new_deltas}')
+        return new_deltas
+    
+    def compare_methods(self, methods=[dcom_labeling], no_plot=False):
+        return super().compare_methods(methods, no_plot)
+    
+    @set_name("Random Sampling")
+    def random_sampling(self, sample_size=None):
+        return super().random_sampling(sample_size)
+    
+    @set_name("Least Confidence")
+    def least_confidence(self,top_frac=0.15):
+        return super().least_confidence(top_frac)
+    
+    @set_name("Margin Sampling")
+    def margin_sampling(self,top_frac=0.15):
+        return super().margin_sampling(top_frac)
+    
+    @set_name("Entropy Sampling")
+    def entropy_sampling(self,top_frac=0.15):
+        return super().entropy_sampling(top_frac)
+    
+    @set_name("ProbCover")
+    def prob_cover_labeling(self):
+        return super().prob_cover_labeling()
+    
+    @set_name("TypiClust")
+    def typiclust_labeling(self):
+        return super().typiclust_labeling()
+
+    def test_methods(self, n_tests=2, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling, prob_cover_labeling, typiclust_labeling, dcom_labeling], plot=True, quiet=False, increase_b=False):
+        return super().test_methods(n_tests, methods, plot, quiet, increase_b)
