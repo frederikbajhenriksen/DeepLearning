@@ -9,11 +9,11 @@ transform = torchvision.transforms.Compose([
 ])
 
 train_dataset = torchvision.datasets.CIFAR10(root="./data_cifar", download=True, train=True)
-ac = AL.DCoM(train_dataset, unlabelled_size=0.999, label_iterations=7, num_epochs=30, delta=0.515,b=20, debug=False,quiet=True)
+ac = AL.DCoM(train_dataset, unlabelled_size=0.999, label_iterations=7, num_epochs=30, delta=0.515,b=10, debug=False,quiet=True)
 ac.test_methods(n_tests=20, increase_b=True)
 
 train_dataset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
-ac = AL.DCoM(train_dataset, unlabelled_size=0.999, label_iterations=7, num_epochs=30,b=20, delta=0.131, debug=False,quiet=True)
+ac = AL.DCoM(train_dataset, unlabelled_size=0.999, label_iterations=7, num_epochs=30,b=10, delta=0.131, debug=False,quiet=True)
 ac.test_methods(n_tests=20, increase_b=True)
 
 

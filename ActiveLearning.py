@@ -869,11 +869,11 @@ class ActiveLearning:
                     print(f"After AL iteration {i + 1}:")
                     print(f" - Labeled images in training set: {len(self.lSet)}")
                     print(f" - Remaining unlabeled images in unlabeled set: {len(self.uSet)}")
+                if increase_b:
+                    self.b = int(self.b * 2)
             if plot:
                 self.visualize_decision_boundaries()
         self.reset_data()
-        if increase_b:
-            self.b = int(self.b * 2)
         return datapoint_list, accuracy_list
     
     def compare_methods(self, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling, prob_cover_labeling, typiclust_labeling], no_plot=False):
