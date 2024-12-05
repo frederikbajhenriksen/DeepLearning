@@ -901,6 +901,7 @@ class ActiveLearning:
         return datapoint_lists, accuracy_lists
 
     def test_methods(self, n_tests=2, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling], plot=True, quiet=False, increase_b=False):
+        b_old = self.b
         self.quiet = quiet
 
         seeds = []
@@ -923,7 +924,7 @@ class ActiveLearning:
             for method in tqdm(methods, desc=f"Test {i}"):
                 method_name = method.__name__
                 print(f"Starting method: {method_name}")
-
+                self.b = b_old
                 try:
                     # Run AL Loop
                     datapoint_list, accuracy_list = self.Al_Loop(method, title=method_name, plot=plot,increase_b=increase_b)
