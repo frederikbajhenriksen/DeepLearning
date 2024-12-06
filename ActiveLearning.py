@@ -900,11 +900,12 @@ class ActiveLearning:
         plt.close()
         return datapoint_lists, accuracy_lists
 
-    def test_methods(self, n_tests=2, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling], plot=True, quiet=False, increase_b=False):
+    def test_methods(self, n_tests=2, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling], plot=True, quiet=False, increase_b=False, seeds=None):
         b_old = self.b
         self.quiet = quiet
 
-        seeds = []
+        if seeds is None:
+            seeds = []
         method_results = {
             method.__name__: {
                 'datapoints': [],
@@ -914,10 +915,21 @@ class ActiveLearning:
 
         for i in range(n_tests):
             # Set seeds
-            seed = np.random.randint(0, 100000)
-            torch.manual_seed(seed)
-            np.random.seed(seed)
-            seeds.append(seed)
+            if seeds is not None:
+                if i < len(seeds):
+                    seed = seeds[i]
+                    torch.manual_seed(seed)
+                    np.random.seed(seed)
+                else:
+                    seed = np.random.randint(0, 100000)
+                    torch.manual_seed(seed)
+                    np.random.seed(seed)
+                    seeds.append(seed)
+            else:
+                seed = np.random.randint(0, 100000)
+                torch.manual_seed(seed)
+                np.random.seed(seed)
+                seeds.append(seed)
 
             print(f"Starting Test {i}")
 
@@ -1242,6 +1254,6 @@ class DCoM(ActiveLearning):
     def typiclust_labeling(self):
         return super().typiclust_labeling()
 
-    def test_methods(self, n_tests=2, methods=[dcom_labeling], plot=True, quiet=False, increase_b=False):
-        return super().test_methods(n_tests, methods, plot, quiet, increase_b)
+    def test_methods(self, n_tests=2, methods=[dcom_labeling], plot=True, quiet=False, increase_b=False,seeds=None):
+        return super().test_methods(n_tests, methods, plot, quiet, increase_b,seeds=seeds)
 # random_sampling, least_confidence, margin_sampling, entropy_sampling, prob_cover_labeling, typiclust_labeling,
