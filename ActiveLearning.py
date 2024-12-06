@@ -1042,7 +1042,7 @@ class DCoM(ActiveLearning):
                  delta=None,
                  alpha=0.75,
                  quiet=False):
-        super().__init__(dataObj=dataObj, unlabelled_size=unlabelled_size, label_iterations=label_iterations, num_epochs=num_epochs, criterion=criterion, debug=debug, lr=lr, seed=seed, val_split=val_split, quiet=quiet, delta=delta, alpha=alpha)
+        super().__init__(dataObj=dataObj, unlabelled_size=unlabelled_size, label_iterations=label_iterations, num_epochs=num_epochs, criterion=criterion, debug=debug, lr=lr, seed=seed, val_split=val_split, quiet=quiet, delta=delta, alpha=alpha,b=b)
         
         self.deltas = []
         self.max_delta = self.delta
@@ -1132,8 +1132,7 @@ class DCoM(ActiveLearning):
             selected.append(cur_selected)
 
         selected = np.array(selected)
-        if not self.quiet:
-            print(f"DCoM selected: {selected}")
+        
         self.transfer_unlabelled_to_labelled(selected, method_name = "DCoM")
 
     def delta_expansion(self):
@@ -1166,8 +1165,7 @@ class DCoM(ActiveLearning):
         coverage = len(covered_samples) / len(self.dataObj)
 
         purity_thrshold = calc_threshold(coverage)
-        if not self.quiet:
-            print(f'Current coverage is {coverage:.3f}, purity threshold is {purity_thrshold:.3f}')
+        
 
         self.model.eval()
         predictions = []
@@ -1214,8 +1212,7 @@ class DCoM(ActiveLearning):
         if new_deltas:
             self.max_delta = max(new_deltas)
         self.lSet_deltas_dict.update({i: d for i, d in zip(self.lSet, self.deltas)})
-        if not self.quiet:
-            print(f'New deltas added: {new_deltas}')
+        
         return new_deltas
     
     def compare_methods(self, methods=[dcom_labeling], no_plot=False):
@@ -1245,5 +1242,6 @@ class DCoM(ActiveLearning):
     def typiclust_labeling(self):
         return super().typiclust_labeling()
 
-    def test_methods(self, n_tests=2, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling, prob_cover_labeling, typiclust_labeling, dcom_labeling], plot=True, quiet=False, increase_b=False):
+    def test_methods(self, n_tests=2, methods=[dcom_labeling], plot=True, quiet=False, increase_b=False):
         return super().test_methods(n_tests, methods, plot, quiet, increase_b)
+# random_sampling, least_confidence, margin_sampling, entropy_sampling, prob_cover_labeling, typiclust_labeling,
