@@ -345,7 +345,7 @@ class ActiveLearning:
                     print(f'Epoch {epoch + 1}, {description} Accuracy: {val_accuracy:.2f}%')
         return accuracies
     
-    def visualize_decision_boundaries(self, sample_size=500):
+    def visualize_decision_boundaries(self, sample_size=500, title="Decision Boundaries"):
         """ Visualize decision boundaries using t-SNE for dimensionality reduction 
         Args:
             sample_size: Number of samples to use for visualization
@@ -382,11 +382,10 @@ class ActiveLearning:
         tsne_results = tsne.fit_transform(embeddings)
 
         # Plot the results
-        plt.figure(figsize=(10, 8))
+        plt.figure(figsize=(20, 8))
         scatter = plt.scatter(tsne_results[:, 0], tsne_results[:, 1], c=labels, cmap='tab10')
         plt.legend(handles=scatter.legend_elements()[0], labels=range(self.k), title="Classes")
-        plt.title("t-SNE of Decision Boundaries in Unlabelled Dataset")
-        plt.savefig('tsne_decision_boundaries.png', dpi=300)
+        plt.savefig(f'tsne_decision_boundaries_{title}.png', dpi=300)
         plt.close()
 
     def display_added_images(self, images, labels):
@@ -861,6 +860,8 @@ class ActiveLearning:
             self.model.load_state_dict(self.model_parameters)  # Reset model parameters before training
             # Train model and save accuracies
             accuracies = self.train_model(val_interval=30, description=description)
+            if plot:
+                self.visualize_decision_boundaries(title=f"{self.data_name}_{title}_before_AL_Iteration_{i}")
             datapoint_list.append(len(self.lSet))
             accuracy_list.append(accuracies)
             if i < self.label_iterations - 1:
@@ -872,7 +873,7 @@ class ActiveLearning:
                 if increase_b:
                     self.b = int(self.b * 2)
             if plot:
-                self.visualize_decision_boundaries()
+                self.visualize_decision_boundaries(title=f"{self.data_name}_{title}_Iteration_{i}")
         self.reset_data()
         return datapoint_list, accuracy_list
     
