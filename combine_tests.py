@@ -40,9 +40,9 @@ def combine_experiment_runs(mean1, se1, n1, mean2, se2, n2):
     return combined_mean, combined_standard_error
 
 # load experimental results
-df1 = pd.read_csv('test_methods_results_MNIST_4.csv')
-df2 = pd.read_csv('test_methods_results_MNIST_3.csv')
-df3 = pd.read_csv('test_methods_results_MNIST_2.csv')
+df1 = pd.read_csv('test_methods_results_CIFAR10_4.csv')
+df2 = pd.read_csv('test_methods_results_CIFAR10_3.csv')
+df3 = pd.read_csv('test_methods_results_CIFAR10_2.csv')
 
 # extract datapoints from the dataframes
 datapoints = []
