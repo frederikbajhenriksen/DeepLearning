@@ -210,48 +210,37 @@ method_colors = {method: colors[i] for i, method in enumerate(methods)}
 # Create side-by-side plots
 fig, axes = plt.subplots(1, 2, figsize=(20, 8), constrained_layout=True)
 
-# Plot Total Accuracy
+mean_r = np.array(df3['Random Sampling'][2].replace('[', '').replace(']', '').split('\n ')).astype(float)
+se_r = np.array(df3['Random Sampling'][3].replace('[', '').replace(']', '').split('\n ')).astype(float)
+
+# # Plot Total Accuracy
 for i, method in enumerate(methods):
-    try:
-        mean1 = np.array(df1[method][2].replace('[', '').replace(']', '').split('\n ')).astype(float)
-        se1 = np.array(df1[method][3].replace('[', '').replace(']', '').split('\n ')).astype(float)
-        mean2 = np.array(df2[method][2].replace('[', '').replace(']', '').split('\n ')).astype(float)
-        se2 = np.array(df2[method][3].replace('[', '').replace(']', '').split('\n ')).astype(float)
-        combined_mean, combined_se = combine_experiment_runs(mean1, se1, n, mean2, se2, n)
-        mean3 = np.array(df3[method][2].replace('[', '').replace(']', '').split('\n ')).astype(float)
-        se3 = np.array(df3[method][3].replace('[', '').replace(']', '').split('\n ')).astype(float)
-        combined_mean = np.append(mean3, combined_mean)
-        combined_se = np.append(se3, combined_se)
-    except:
-        combined_mean = np.array(df2[method][2].replace('[', '').replace(']', '').split('\n ')).astype(float)
-        combined_se = np.array(df2[method][3].replace('[', '').replace(']', '').split('\n ')).astype(float)
-        mean3 = np.array(df3[method][2].replace('[', '').replace(']', '').split('\n ')).astype(float)
-        se3 = np.array(df3[method][3].replace('[', '').replace(']', '').split('\n ')).astype(float)
-        combined_mean = np.append(mean3, combined_mean)
-        combined_se = np.append(se3, combined_se)
+    combined_mean = np.array(df3[method][2].replace('[', '').replace(']', '').split('\n ')).astype(float)
+    combined_se = np.array(df3[method][3].replace('[', '').replace(']', '').split('\n ')).astype(float)
+    combined_mean = combined_mean - mean_r
+    combined_se = combined_se - se_r
 
     total_indices = np.arange(len(combined_mean))
     axes[0].plot(total_indices, combined_mean, color=method_colors[method], linestyle=linestyles[i % len(linestyles)], label=method)
     axes[0].fill_between(total_indices, combined_mean - combined_se, combined_mean + combined_se, color=method_colors[method], alpha=0.2)
 
 axes[0].set_xticks(total_indices)
-axes[0].set_xticklabels(data, rotation=45)
-axes[0].set_xlabel('Number of datapoints')
-axes[0].set_ylabel('Accuracy')
-axes[0].set_title('Total Accuracy of All Methods on MNIST')
+axes[0].set_xticklabels(datapoints2, rotation=45)
+axes[0].set_xlabel('Cummulative Budget')
+axes[0].set_ylabel('Difference in Accuracy')
+axes[0].set_title('Difference in Accuracy of All Methods on MNIST')
 axes[0].legend(loc='upper left', bbox_to_anchor=(1, 1), framealpha=0.8)
 axes[0].grid(color='gray', linestyle='--', linewidth=0.5, alpha=0.7)
 
+
 # Plot Accuracy Differences
-mean_r = np.array(df3['Random Sampling'][2].replace('[', '').replace(']', '').split('\n ')).astype(float)
-se_r = np.array(df3['Random Sampling'][3].replace('[', '').replace(']', '').split('\n ')).astype(float)
 mean2_r = np.array(df2['Random Sampling'][2].replace('[', '').replace(']', '').split('\n ')).astype(float)
 se2_r = np.array(df2['Random Sampling'][3].replace('[', '').replace(']', '').split('\n ')).astype(float)
 mean1_r = np.array(df1['Random Sampling'][2].replace('[', '').replace(']', '').split('\n ')).astype(float)
 se1_r = np.array(df1['Random Sampling'][3].replace('[', '').replace(']', '').split('\n ')).astype(float)
 combined_mean_r, combined_se_r = combine_experiment_runs(mean1_r, se1_r, n, mean2_r, se2_r, n)
-combined_mean_r = np.append(mean_r, combined_mean_r)
-combined_se_r = np.append(se_r, combined_se_r)
+combined_mean_r = combined_mean_r
+combined_se_r = combined_se_r
 
 for i, method in enumerate(methods):
     try:
@@ -260,30 +249,33 @@ for i, method in enumerate(methods):
         mean2 = np.array(df2[method][2].replace('[', '').replace(']', '').split('\n ')).astype(float)
         se2 = np.array(df2[method][3].replace('[', '').replace(']', '').split('\n ')).astype(float)
         combined_mean, combined_se = combine_experiment_runs(mean1, se1, n, mean2, se2, n)
-        mean3 = np.array(df3[method][2].replace('[', '').replace(']', '').split('\n ')).astype(float)
-        se3 = np.array(df3[method][3].replace('[', '').replace(']', '').split('\n ')).astype(float)
-        combined_mean = np.append(mean3, combined_mean) - combined_mean_r
-        combined_se = np.append(se3, combined_se) - combined_se_r
+        combined_mean = combined_mean - combined_mean_r
+        combined_se = combined_se - combined_se_r
+        
     except:
         combined_mean = np.array(df2[method][2].replace('[', '').replace(']', '').split('\n ')).astype(float)
         combined_se = np.array(df2[method][3].replace('[', '').replace(']', '').split('\n ')).astype(float)
-        mean3 = np.array(df3[method][2].replace('[', '').replace(']', '').split('\n ')).astype(float)
-        se3 = np.array(df3[method][3].replace('[', '').replace(']', '').split('\n ')).astype(float)
-        combined_mean = np.append(mean3, combined_mean) - combined_mean_r
-        combined_se = np.append(se3, combined_se) - combined_se_r
-
+        combined_mean = combined_mean - combined_mean_r
+        combined_se = combined_se - combined_se_r
+        
     total_indices = np.arange(len(combined_mean))
     axes[1].plot(total_indices, combined_mean, color=method_colors[method], linestyle=linestyles[i % len(linestyles)], label=method)
     axes[1].fill_between(total_indices, combined_mean - combined_se, combined_mean + combined_se, color=method_colors[method], alpha=0.2)
 
 axes[1].set_xticks(total_indices)
-axes[1].set_xticklabels(data, rotation=45)
-axes[1].set_xlabel('Number of datapoints')
+axes[1].set_xticklabels(datapoints, rotation=45)
+axes[1].set_xlabel('Cummulative Budget')
 axes[1].set_ylabel('Difference in Accuracy')
 axes[1].set_title('Difference in Accuracy of All Methods on MNIST')
-# axes[1].legend(loc='upper left', bbox_to_anchor=(1, 1), framealpha=0.8)
+#axes[1].legend(loc='upper left', bbox_to_anchor=(1, 1), framealpha=0.8)
 axes[1].grid(color='gray', linestyle='--', linewidth=0.5, alpha=0.7)
 
 # Save the combined figure
 plt.savefig('MNIST_accuracies_combined.pdf', dpi=300)
 plt.show()
+
+
+
+
+
+        
