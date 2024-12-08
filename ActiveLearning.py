@@ -218,7 +218,7 @@ class ActiveLearning:
         """Initialize the data for active learning by splitting into training and validation sets."""
         self.val_data = deepcopy(self.dataObj)
         train_size = int((1 - val_split) * len(self.dataObj))
-        indexes = torch.randperm(len(self.dataObj)).tolist()
+        indexes = torch.randperm(len(self.dataObj) - 1).tolist()
 
         val_index = indexes[train_size:]
         train_index = indexes[:train_size]
@@ -241,7 +241,7 @@ class ActiveLearning:
             raise ValueError("Unsupported data type for dataset")
         # Create labeled/unlabeled splits
         self.unlabelled_size = int(self.unlabelled_size * len(self.dataObj))
-        indexes_train = torch.randperm(len(self.dataObj)).tolist()
+        indexes_train = torch.randperm(len(self.dataObj) - 1).tolist()
         self.uSet = indexes_train[:self.unlabelled_size]
         self.lSet = indexes_train[self.unlabelled_size:]
 
@@ -439,7 +439,7 @@ class ActiveLearning:
             raise ValueError("Unsupported data type for dataset")
 
         # Save grid of added images
-        self.save_added_images(added_images, added_labels,  method_name)
+        #self.save_added_images(added_images, added_labels,  method_name)
 
     def save_added_images(self, images, labels, method_name):
         """
@@ -851,7 +851,7 @@ class ActiveLearning:
     #########
     # Final functions
     #########
-    def Al_Loop(self, function, title="Random Sampling", plot=True, increase_b=False):
+    def Al_Loop(self, function, title="Random Sampling", plot=False, increase_b=False):
         # Active Learning Loop
         datapoint_list = []  # To store the number of labeled datapoints for active learning
         accuracy_list = []  # To store accuracy after each iteration of active learning
@@ -901,7 +901,11 @@ class ActiveLearning:
         plt.close()
         return datapoint_lists, accuracy_lists
 
-    def test_methods(self, n_tests=2, methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling], plot=True, quiet=False, increase_b=False, seeds=None):
+    def test_methods(self, 
+                     n_tests=2, 
+                     methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling], 
+                     plot=True, quiet=False, increase_b=False, seeds=None
+                     , title_append=""):
         b_old = self.b
         self.quiet = quiet
 
@@ -940,7 +944,7 @@ class ActiveLearning:
                 self.b = b_old
                 try:
                     # Run AL Loop
-                    datapoint_list, accuracy_list = self.Al_Loop(method, title=method_name, plot=plot,increase_b=increase_b)
+                    datapoint_list, accuracy_list = self.Al_Loop(method, title=method_name,increase_b=increase_b)
                     print(f"Method {method_name} completed successfully.")
 
                     # Store results by method
@@ -990,6 +994,7 @@ class ActiveLearning:
                 print(f"Aggregated results for {method_name}: {aggregated_results[method_name]}")
             except Exception as e:
                 print(f"Error processing method {method_name}: {e}")
+                
 
         # Plotting
         plt.figure(figsize=(10, 5))
@@ -1009,7 +1014,7 @@ class ActiveLearning:
         plt.close()
 
         # Save results to CSV
-        pd.DataFrame(aggregated_results).to_csv(f'test_methods_results_{self.data_name}.csv')
+        pd.DataFrame(aggregated_results).to_csv(f'test_methods_results_{self.data_name}_{title_append}.csv')
 
         # Plotting difference from Random Sampling
         if 'Random Sampling' in aggregated_results:
@@ -1255,6 +1260,8 @@ class DCoM(ActiveLearning):
     def typiclust_labeling(self):
         return super().typiclust_labeling()
 
-    def test_methods(self, n_tests=2, methods=[dcom_labeling], plot=True, quiet=False, increase_b=False,seeds=None):
-        return super().test_methods(n_tests, methods, plot, quiet, increase_b,seeds=seeds)
-# random_sampling, least_confidence, margin_sampling, entropy_sampling, prob_cover_labeling, typiclust_labeling,
+    def test_methods(self, n_tests=2, 
+                     methods=[random_sampling, least_confidence, margin_sampling, entropy_sampling, prob_cover_labeling, typiclust_labeling,dcom_labeling], 
+                     plot=True, quiet=False, increase_b=False,seeds=None
+                     , title_append=""):
+        return super().test_methods(n_tests, methods, plot, quiet, increase_b,seeds=seeds, title_append=title_append)
