@@ -714,11 +714,6 @@ class ActiveLearning:
             idx = indices[typicality.argmax()]
             typical_samples.append(idx)
         return typical_samples
-    
-    #########
-    # Methods for DCoM
-    #########
-
 
     #########
     # Sampling Methods
@@ -969,7 +964,7 @@ class ActiveLearning:
             'typiclust_labeling': 'TypiClust',
             'dcom_labeling': 'DCoM'
         }
-
+        accuria = []
         # Calculate statistics for each method
         aggregated_results = {}
         for method_name, results in method_results.items():
@@ -981,6 +976,7 @@ class ActiveLearning:
                 accuracies = np.array(results['accuracies'])
 
                 mean_accuracy = accuracies.mean(axis=0)
+                accuria.append(mean_accuracy)
                 error_accuracy = accuracies.std(axis=0)
                 error_accuracy = 1.96 * error_accuracy / np.sqrt(n_tests)  # 95% CI
 
@@ -994,58 +990,8 @@ class ActiveLearning:
                 print(f"Aggregated results for {method_name}: {aggregated_results[method_name]}")
             except Exception as e:
                 print(f"Error processing method {method_name}: {e}")
-                
 
-        # Plotting
-        plt.figure(figsize=(10, 5))
-        for method_name, results in aggregated_results.items():
-            x = results['datapoints'].mean(axis=0)
-            y = results['mean_accuracy'].reshape(-1)
-            yerr = results['error_accuracy'].reshape(-1)
-            label = results.get('display_name', method_name)
-
-            plt.errorbar(x, y, yerr=yerr, label=label, capsize=3)
-
-        plt.xlabel('Datapoints')
-        plt.ylabel('Accuracy')
-        plt.legend()
-        plt.tight_layout()
-        plt.savefig(f'test_methods_accuracy_{self.data_name}.png', dpi=300)
-        plt.close()
-
-        # Save results to CSV
-        pd.DataFrame(aggregated_results).to_csv(f'test_methods_results_{self.data_name}_{title_append}.csv')
-
-        # Plotting difference from Random Sampling
-        if 'Random Sampling' in aggregated_results:
-            random_sampling = aggregated_results['Random Sampling']['mean_accuracy'].reshape(-1)
-            random_sampling_err = aggregated_results['Random Sampling']['error_accuracy'].reshape(-1)
-
-            plt.figure(figsize=(10, 5))
-            for method_name, results in aggregated_results.items():
-                if method_name == 'random_sampling':
-                    continue  # Skip plotting difference for baseline
-
-                x = results['datapoints'].mean(axis=0)
-                y = results['mean_accuracy'].reshape(-1)
-                yerr = results['error_accuracy'].reshape(-1)
-                label = results.get('display_name', method_name)
-
-                y_diff = y - random_sampling
-                yerr_diff = np.sqrt(yerr**2 + random_sampling_err**2)
-
-                plt.errorbar(x, y_diff, yerr=yerr_diff, label=label, capsize=3)
-
-            plt.xlabel('Datapoints')
-            plt.ylabel('Accuracy Difference from Random Sampling')
-            plt.legend()
-            plt.tight_layout()
-            plt.savefig(f'test_methods_difference_{self.data_name}.png', dpi=300)
-            plt.close()
-        else:
-            print("Warning: Random Sampling results not found. Cannot plot differences.")
-
-        return aggregated_results
+        return aggregated_results, accuria
 
 class DCoM(ActiveLearning):
     def __init__(self, dataObj, 
